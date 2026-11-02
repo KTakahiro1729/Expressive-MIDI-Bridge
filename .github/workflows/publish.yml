@@ -1,0 +1,51 @@
+name: Publish tested downloads
+
+on:
+  workflow_run:
+    workflows: ["Build, test and publish downloads"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    # Never publish untrusted PR artifacts or partially failed builds.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all tested artifacts from this run
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          pattern: expressive-*
+          path: release-files
+          merge-multiple: true
+      - name: Assert all platforms and Python are included
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release-files/Expressive-MIDI-Player-windows-x64.zip
+          test -s release-files/Expressive-MIDI-Player-macos.zip
+          ls release-files/*.whl release-files/*.tar.gz >/dev/null
+      - name: Publish permanent GitHub Release downloads
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ github.event.workflow_run.id }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          tag="ci-${SOURCE_RUN}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-files/* --clobber
+          else
+            gh release create "$tag" release-files/* \
+              --title "Automated build ${SOURCE_RUN}" \
+              --notes "Automated build from tested commit ${SOURCE_SHA}. Windows/macOS VST3 plugins are MIDI-only and unsigned; the Python package does not include AI model weights. Verify MIDI routing in your DAW." \
+              --target "$SOURCE_SHA" \
+              --prerelease
+          fi
