@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(ExpressiveMidiPlayer VERSION 1.0.0 LANGUAGES CXX)
+project(ExpressiveMidiPlayer VERSION 1.0.0 LANGUAGES C CXX)
 
 # Supply -DJUCE_ROOT=/path/to/JUCE to use an already-downloaded JUCE checkout.
 # Otherwise the first configure needs Internet access.
