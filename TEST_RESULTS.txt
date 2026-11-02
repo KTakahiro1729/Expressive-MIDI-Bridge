@@ -1,0 +1,15 @@
+Expressive MIDI Bridge 1.0 — verification record (2026-11-02)
+
+Python runtime: Python 3.13.5
+Tests: 24 passed (pytest)
+C++: standalone scheduling test compiled by g++ C++17; 5 assertions passed
+CLI: baseline/identity/render/flatten/doctor commands exercised; baseline produces standard MIDI
+AI adapter: upstream function signature reviewed against published generate.py/inference.py;
+            mocked integration passes; real weights/inference NOT run
+VST3: source corrected to JUCE IS_SYNTH TRUE / IS_MIDI_EFFECT FALSE,
+      stereo output bus and MIDI output enabled. JUCE SDK unavailable offline;
+      VST3 compilation & Fender Studio Pro host operation NOT verified.
+Model weight: NOT included; user must install from official source (~272MB).
+
+This verification record is an accurate description of what was executed,
+not a compatibility certification.

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expressive-midi-bridge"
+version = "1.0.0"
+description = "Score MIDI to expressive performance MIDI, independent of the instrument plugin"
+requires-python = ">=3.10"
+dependencies = ["mido>=1.3,<2"]
+license = {text = "MIT"}
+
+[project.scripts]
+expressive-midi = "expressive_midi.cli:main"
+expressive-midi-gui = "expressive_midi.gui:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["expressive_midi*"]
+exclude = ["tests*", "demo*", "vst3*"]

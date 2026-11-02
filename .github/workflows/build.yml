@@ -1,0 +1,96 @@
+name: Build, test and publish downloads
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python package and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install package and build tools
+        run: python -m pip install -e . pytest build
+      - name: Python unit tests
+        run: python -m pytest -q
+      - name: Generate and render a sample MIDI
+        run: |
+          python -m expressive_midi demo -o demo/ci_score.mid
+          python -m expressive_midi render demo/ci_score.mid demo/ci_render.mid --backend baseline --daw-bpm 120
+      - name: Test C++ MIDI scheduler
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror tests/scheduler_test.cpp -o /tmp/midi_scheduler_test
+          /tmp/midi_scheduler_test
+      - name: Build wheel and source distribution
+        run: python -m build
+      - name: Upload Python package
+        uses: actions/upload-artifact@v4
+        with:
+          name: expressive-python
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  vst3:
+    name: VST3 (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows-x64
+          - runner: macos-latest
+            platform: macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Configure JUCE VST3
+        run: cmake -S vst3/JuceMidiPlayer -B build/vst3 -DCMAKE_BUILD_TYPE=Release
+      - name: Build JUCE VST3
+        run: cmake --build build/vst3 --config Release --target ExpressiveMidiPlayer_VST3 --parallel 2
+      - name: Package VST3 bundle
+        run: python scripts/package_vst3.py --build build/vst3 --platform ${{ matrix.platform }}
+      - name: Upload VST3 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: expressive-vst3-${{ matrix.platform }}
+          path: dist/Expressive-MIDI-Player-${{ matrix.platform }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    needs: [python, vst3]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: expressive-*
+          path: release-files
+          merge-multiple: true
+      - name: Create release with direct downloads
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
