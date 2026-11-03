@@ -17,6 +17,8 @@ void ExpressiveMidiPlayerProcessor::prepareToPlay(double, int)
     nextExpectedPpq = -1.0;
     lastClipRevision = clipRevision.load();
     previousMode = -1;
+    previousHandMapping = -1;
+    previousSplitNote = -1;
     wasLivePlaying = false;
     expectedLivePpq = -1;
     liveHumanizer.reset();
@@ -111,9 +113,15 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
     }
     if (selectedMode == 0)
     {
+        const int currentMapping = handMapping.load();
+        const int currentSplit = splitNote.load();
+        const bool assignmentChanged = (previousHandMapping >= 0 && currentMapping != previousHandMapping)
+            || (currentMapping == 0 && previousSplitNote >= 0 && currentSplit != previousSplitNote);
+        previousHandMapping = currentMapping;
+        previousSplitNote = currentSplit;
         const bool jumped = playing && wasLivePlaying && validClock
                             && std::abs(ppq - expectedLivePpq) > 0.05;
-        if ((wasLivePlaying && !playing) || jumped)
+        if ((wasLivePlaying && !playing) || jumped || (wasLivePlaying && assignmentChanged))
         {
             liveHumanizer.reset();
             for (int channel = 1; channel <= 16; ++channel)
@@ -131,12 +139,23 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
             const bool on = msg.isNoteOn();
             if (on || msg.isNoteOff())
             {
+                const auto assignment = expressive::classifyHand(msg.getChannel(), msg.getNoteNumber(),
+                    handMapping.load() == 1 ? expressive::HandMapping::midiChannels
+                                            : expressive::HandMapping::pitchSplit,
+                    splitNote.load());
+                if (assignment == expressive::Hand::unchanged)
+                {
+                    messages.addEvent(msg, at);
+                    continue;
+                }
+                const auto& settings = hands[assignment == expressive::Hand::left ? 1 : 0];
                 const bool queued = liveHumanizer.add(at, msg.getChannel(), msg.getNoteNumber(),
                     on ? static_cast<int>(msg.getVelocity()) : 0, on,
-                    strength.load(), timingMs.load(), velocityRange.load(), rate);
-                if (!queued) messages.addEvent(msg, at); // queue full: preserve original note
+                    settings.strength.load(), settings.timingMs.load(),
+                    settings.velocityRange.load(), rate);
+                if (!queued) messages.addEvent(msg, at); // full queue: preserve original note
             }
-            else messages.addEvent(msg, at); // CC/pedals and all other messages untouched
+            else messages.addEvent(msg, at); // CC/pedals and other messages are unchanged
         }
         liveHumanizer.emitBlock(samples, [&messages](const expressive::LiveNote& note, int at)
         {
@@ -209,9 +228,14 @@ void ExpressiveMidiPlayerProcessor::getStateInformation(juce::MemoryBlock& data)
     state.setAttribute("name", lastLoadedName);
     state.setAttribute("startBeats", startBeats.load());
     state.setAttribute("mode", mode.load());
-    state.setAttribute("strength", strength.load());
-    state.setAttribute("timingMs", timingMs.load());
-    state.setAttribute("velocityRange", velocityRange.load());
+    state.setAttribute("handMapping", handMapping.load());
+    state.setAttribute("splitNote", splitNote.load());
+    state.setAttribute("rhStrength", hands[0].strength.load());
+    state.setAttribute("rhTimingMs", hands[0].timingMs.load());
+    state.setAttribute("rhVelocityRange", hands[0].velocityRange.load());
+    state.setAttribute("lhStrength", hands[1].strength.load());
+    state.setAttribute("lhTimingMs", hands[1].timingMs.load());
+    state.setAttribute("lhVelocityRange", hands[1].velocityRange.load());
     if (embeddedMidi.getSize() != 0)
         state.setAttribute("midiBase64", embeddedMidi.toBase64Encoding());
     copyXmlToBinary(state, data);
@@ -225,9 +249,23 @@ void ExpressiveMidiPlayerProcessor::setStateInformation(const void* data, int si
             startBeats.store(xml->getDoubleAttribute("startBeats", 0.0));
             const auto encoded = xml->getStringAttribute("midiBase64");
             mode.store(xml->getIntAttribute("mode", encoded.isNotEmpty() ? 1 : 0));
-            strength.store(juce::jlimit(0.0, 1.0, xml->getDoubleAttribute("strength", 0.65)));
-            timingMs.store(juce::jlimit(0.0, 40.0, xml->getDoubleAttribute("timingMs", 16.0)));
-            velocityRange.store(juce::jlimit(0, 32, xml->getIntAttribute("velocityRange", 12)));
+            handMapping.store(xml->getIntAttribute("handMapping", 0) == 1 ? 1 : 0);
+            splitNote.store(juce::jlimit(21, 108, xml->getIntAttribute("splitNote", 60)));
+            // Backward compatibility: v1.1's shared settings initialize both hands.
+            for (int h = 0; h < 2; ++h)
+            {
+                const bool right = h == 0;
+                const auto prefix = right ? "rh" : "lh";
+                hands[h].strength.store(juce::jlimit(0.0, 1.0,
+                    xml->getDoubleAttribute(juce::String(prefix) + "Strength",
+                                            xml->getDoubleAttribute("strength", 0.65))));
+                hands[h].timingMs.store(juce::jlimit(0.0, 40.0,
+                    xml->getDoubleAttribute(juce::String(prefix) + "TimingMs",
+                                            xml->getDoubleAttribute("timingMs", 16.0))));
+                hands[h].velocityRange.store(juce::jlimit(0, 32,
+                    xml->getIntAttribute(juce::String(prefix) + "VelocityRange",
+                                         xml->getIntAttribute("velocityRange", 12))));
+            }
             juce::String error;
             if (encoded.isNotEmpty())
             {

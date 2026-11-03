@@ -36,6 +36,10 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror tests/live_humanizer_test.cpp -o /tmp/live_humanizer_test
           /tmp/live_humanizer_test
+      - name: Test C++ piano-hand routing
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror tests/hand_routing_test.cpp -o /tmp/midi_hands_test
+          /tmp/midi_hands_test
       - name: Build wheel and source distribution
         run: python -m build
       - name: Upload Python package
