@@ -206,3 +206,19 @@ References:
 - JUCE CMake API: https://github.com/juce-framework/JUCE/blob/master/docs/CMake%20API.md
 - VST3 MIDI-out host behavior: https://forum.juce.com/t/vst3-midi-audio/62624/14
 - Fender official virtual instrument routing manual: https://fenderstudiopromanual.fender.com/en/Content/Recording_Topics/Instrument_Tracks.htm
+
+## Live MIDI directly from a Fender Studio Pro track (v1.1)
+
+The VST3 now defaults to **Live MIDI on this track**. Do **not** use `Load MIDI` for this mode.
+
+1. Create an instrument track with **Expressive MIDI Player** as its instrument.
+2. Put (paste, drag, record) the existing piano MIDI part directly on **that Player track**.
+3. Create a **second** instrument track with the piano VSTi or built-in piano instrument.
+4. In the piano track's Inspector (F4), select **Expressive MIDI Player** as its Instrument Input (if Fender exposes the VST3 MIDI output). Enable input monitoring on the piano track.
+5. Start playback. Adjust the **Humanize strength**, **Timing**, and **Velocity range** in the player. At 0% strength, notes are passed through unchanged. No manual MIDI file loading is required.
+
+For an **existing piano track**, keep its instrument but move/copy its MIDI part to the Player track. Mute the original MIDI part to avoid duplicated notes. This is a non-destructive source-clip workflow: the original MIDI remains editable on the Player track. The Player does **not** insert into Fender's native Note FX rack. Generic VST3 MIDI effects do not have the same-track Note FX routing available to proprietary Fender Note FX processors.
+
+The live settings use **rule-based deterministic timing delay and velocity variation**, not Pianist Transformer. The model-backed AI engine remains an offline Python path requiring additional development for automatic in-DAW capture and phrase generation. Timing changes are positive delay only (0-40 ms; set to 0 to disable). Note lengths and pedals remain unchanged in live mode. Live-note queue capacity is 4096; excess events pass through unchanged. Fender host MIDI-out routing still requires an actual host test.
+
+In the Source dropdown, **External MIDI file (legacy)** retains the old file-player behavior for projects that used it. Both modes store settings in the DAW project.

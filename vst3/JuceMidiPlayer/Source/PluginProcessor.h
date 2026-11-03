@@ -1,5 +1,6 @@
 #pragma once
 #include <JuceHeader.h>
+#include "LiveHumanizer.h"
 #include <memory>
 #include <vector>
 
@@ -37,6 +38,14 @@ public:
     void setStartBeats(double v) { startBeats.store(v); }
     double getStartBeats() const { return startBeats.load(); }
     bool loadMidiBytes(const void*, size_t, juce::String& error);
+    void setMode(int v) { mode.store(v == 1 ? 1 : 0); }
+    int getMode() const { return mode.load(); }
+    void setStrength(double v) { strength.store(juce::jlimit(0.0, 1.0, v)); }
+    double getStrength() const { return strength.load(); }
+    void setTimingMs(double v) { timingMs.store(juce::jlimit(0.0, 40.0, v)); }
+    double getTimingMs() const { return timingMs.load(); }
+    void setVelocityRange(int v) { velocityRange.store(juce::jlimit(0, 32, v)); }
+    int getVelocityRange() const { return velocityRange.load(); }
 
 private:
     struct ScheduledEvent
@@ -54,6 +63,13 @@ private:
     std::atomic<double> startBeats { 0.0 };
     std::atomic<int> clipRevision { 0 };
     int lastClipRevision = 0;
+    std::atomic<int> mode { 0 }; // 0 = live MIDI from track; 1 = legacy MIDI file
+    std::atomic<double> strength { 0.65 }, timingMs { 16.0 };
+    std::atomic<int> velocityRange { 12 };
+    expressive::LiveHumanizer liveHumanizer;
+    int previousMode = -1;
+    bool wasLivePlaying = false;
+    double expectedLivePpq = -1.0;
     bool wasPlaying = false;
     double nextExpectedPpq = -1.0;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ExpressiveMidiPlayerProcessor)

@@ -32,6 +32,10 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror tests/scheduler_test.cpp -o /tmp/midi_scheduler_test
           /tmp/midi_scheduler_test
+      - name: Test C++ live MIDI humanizer
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror tests/live_humanizer_test.cpp -o /tmp/live_humanizer_test
+          /tmp/live_humanizer_test
       - name: Build wheel and source distribution
         run: python -m build
       - name: Upload Python package
