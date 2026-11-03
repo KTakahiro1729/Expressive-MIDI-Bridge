@@ -12,7 +12,10 @@ private:
     ExpressiveMidiPlayerProcessor& processor;
     juce::TextButton loadButton { "Load MIDI..." };
     juce::TextButton reloadButton { "Reload" };
-    juce::Label status;
+    juce::ComboBox modeSelect;
+    juce::Label modeLabel, status, strengthLabel, timingLabel, velocityLabel, infoLabel;
+    juce::Slider strengthSlider, timingSlider, velocitySlider;
+    void updateModeVisibility();
     juce::Label offsetLabel;
     juce::Slider offsetSlider;
     std::unique_ptr<juce::FileChooser> chooser;

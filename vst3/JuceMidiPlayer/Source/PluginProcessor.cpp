@@ -16,6 +16,10 @@ void ExpressiveMidiPlayerProcessor::prepareToPlay(double, int)
     wasPlaying = false;
     nextExpectedPpq = -1.0;
     lastClipRevision = clipRevision.load();
+    previousMode = -1;
+    wasLivePlaying = false;
+    expectedLivePpq = -1;
+    liveHumanizer.reset();
 }
 
 bool ExpressiveMidiPlayerProcessor::loadMidi(const juce::File& file, juce::String& error)
@@ -85,6 +89,68 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
 {
     juce::ScopedNoDenormals noDenormals;
     audio.clear();
+    const int selectedMode = mode.load();
+    auto* transport = getPlayHead();
+    const auto position = transport ? transport->getPosition() : decltype(transport->getPosition()){};
+    const bool playing = position && position->getIsPlaying();
+    const double bpm = position && position->getBpm() ? *position->getBpm() : 120.0;
+    const double ppq = position && position->getPpqPosition() ? *position->getPpqPosition() : 0.0;
+    const bool validClock = position && position->getPpqPosition() && position->getBpm()
+                            && std::isfinite(ppq) && std::isfinite(bpm) && bpm > 0;
+    const auto samples = audio.getNumSamples();
+    const auto rate = getSampleRate();
+    if (selectedMode != previousMode)
+    {
+        liveHumanizer.reset();
+        if (previousMode >= 0)
+            for (int channel = 1; channel <= 16; ++channel)
+                messages.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+        wasPlaying = false;
+        wasLivePlaying = false;
+        previousMode = selectedMode;
+    }
+    if (selectedMode == 0)
+    {
+        const bool jumped = playing && wasLivePlaying && validClock
+                            && std::abs(ppq - expectedLivePpq) > 0.05;
+        if ((wasLivePlaying && !playing) || jumped)
+        {
+            liveHumanizer.reset();
+            for (int channel = 1; channel <= 16; ++channel)
+            {
+                messages.addEvent(juce::MidiMessage::allNotesOff(channel), 0);
+                messages.addEvent(juce::MidiMessage::controllerEvent(channel, 64, 0), 0);
+            }
+        }
+        juce::MidiBuffer incoming;
+        incoming.swapWith(messages);
+        for (const auto metadata : incoming)
+        {
+            const auto msg = metadata.getMessage();
+            const auto at = metadata.samplePosition;
+            const bool on = msg.isNoteOn();
+            if (on || msg.isNoteOff())
+            {
+                const bool queued = liveHumanizer.add(at, msg.getChannel(), msg.getNoteNumber(),
+                    on ? static_cast<int>(msg.getVelocity()) : 0, on,
+                    strength.load(), timingMs.load(), velocityRange.load(), rate);
+                if (!queued) messages.addEvent(msg, at); // queue full: preserve original note
+            }
+            else messages.addEvent(msg, at); // CC/pedals and all other messages untouched
+        }
+        liveHumanizer.emitBlock(samples, [&messages](const expressive::LiveNote& note, int at)
+        {
+            if (note.on)
+                messages.addEvent(juce::MidiMessage::noteOn(note.channel, note.pitch,
+                    static_cast<juce::uint8>(note.velocity)), at);
+            else
+                messages.addEvent(juce::MidiMessage::noteOff(note.channel, note.pitch), at);
+        });
+        wasLivePlaying = playing;
+        expectedLivePpq = validClock && rate > 0
+            ? ppq + samples / rate * bpm / 60.0 : -1.0;
+        return;
+    }
     const auto current = std::atomic_load(&clip);
     if (!current || current->events.empty())
         return; // When no clip loaded, MIDI input passes through unchanged.
@@ -93,24 +159,23 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
     auto* playHead = getPlayHead();
     if (!playHead)
         return;
-    const auto position = playHead->getPosition();
-    if (!position || !position->getPpqPosition() || !position->getBpm())
+    const auto positionFile = playHead->getPosition();
+    if (!positionFile || !positionFile->getPpqPosition() || !positionFile->getBpm())
         return;
-    const auto ppq = *position->getPpqPosition();
-    const auto bpm = *position->getBpm();
-    const auto playing = position->getIsPlaying();
-    if (!std::isfinite(bpm) || bpm <= 0.0 || !std::isfinite(ppq))
+    const auto filePpq = *positionFile->getPpqPosition();
+    const auto fileBpm = *positionFile->getBpm();
+    const auto filePlaying = positionFile->getIsPlaying();
+    if (!std::isfinite(fileBpm) || fileBpm <= 0.0 || !std::isfinite(filePpq))
         return;
-    const int samples = audio.getNumSamples();
     const double sr = getSampleRate();
     if (sr <= 0.0 || samples <= 0)
         return;
 
     const double offsetBeats = startBeats.load();
-    const double clipPpq = ppq - offsetBeats;
+    const double clipPpq = filePpq - offsetBeats;
     const auto generation = clipRevision.load();
-    const bool jumped = wasPlaying && std::abs(ppq - nextExpectedPpq) > 0.05;
-    if (!playing || jumped || generation != lastClipRevision)
+    const bool jumped = wasPlaying && std::abs(filePpq - nextExpectedPpq) > 0.05;
+    if (!filePlaying || jumped || generation != lastClipRevision)
     {
         if (wasPlaying)
             for (int channel = 1; channel <= 16; ++channel)
@@ -119,16 +184,16 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
                 messages.addEvent(juce::MidiMessage::controllerEvent(channel, 64, 0), 0);
             }
         lastClipRevision = generation;
-        if (!playing)
+        if (!filePlaying)
         {
             wasPlaying = false;
             nextExpectedPpq = -1.0;
             return;
         }
     }
-    const double ppqLength = (samples / sr) * (bpm / 60.0);
-    const double endPpq = ppq + ppqLength;
-    expressive::scheduleBlock(current->events, clipPpq, bpm, sr, samples,
+    const double ppqLength = (samples / sr) * (fileBpm / 60.0);
+    const double endPpq = filePpq + ppqLength;
+    expressive::scheduleBlock(current->events, clipPpq, fileBpm, sr, samples,
         [&messages](const ScheduledEvent& event, int offset)
         {
             messages.addEvent(event.message, offset);
@@ -143,6 +208,10 @@ void ExpressiveMidiPlayerProcessor::getStateInformation(juce::MemoryBlock& data)
     state.setAttribute("path", lastLoadedPath);
     state.setAttribute("name", lastLoadedName);
     state.setAttribute("startBeats", startBeats.load());
+    state.setAttribute("mode", mode.load());
+    state.setAttribute("strength", strength.load());
+    state.setAttribute("timingMs", timingMs.load());
+    state.setAttribute("velocityRange", velocityRange.load());
     if (embeddedMidi.getSize() != 0)
         state.setAttribute("midiBase64", embeddedMidi.toBase64Encoding());
     copyXmlToBinary(state, data);
@@ -155,6 +224,10 @@ void ExpressiveMidiPlayerProcessor::setStateInformation(const void* data, int si
         {
             startBeats.store(xml->getDoubleAttribute("startBeats", 0.0));
             const auto encoded = xml->getStringAttribute("midiBase64");
+            mode.store(xml->getIntAttribute("mode", encoded.isNotEmpty() ? 1 : 0));
+            strength.store(juce::jlimit(0.0, 1.0, xml->getDoubleAttribute("strength", 0.65)));
+            timingMs.store(juce::jlimit(0.0, 40.0, xml->getDoubleAttribute("timingMs", 16.0)));
+            velocityRange.store(juce::jlimit(0, 32, xml->getIntAttribute("velocityRange", 12)));
             juce::String error;
             if (encoded.isNotEmpty())
             {
