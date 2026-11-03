@@ -27,5 +27,21 @@ int main() {
     assert(h.add(0,2,64,1,true,0,0,0,48000));
     h.emitBlock(32,sink);
     assert(out.size()==1 && out[0].velocity==1);
-    std::cout << "Live humanizer: 8 checks passed\n";
+    // Overlapping same-key notes each retain their own onset/off delay (FIFO pairing).
+    out.clear(); h.reset();
+    std::vector<Out> absolute;
+    int blockStart=0;
+    auto absSink = [&](const expressive::LiveNote& n, int at) {
+        absolute.push_back({blockStart + at,n.pitch,n.velocity,n.on});
+    };
+    assert(h.add(0,1,67,65,true,1,3,0,48000));
+    assert(h.add(300,1,67,90,true,1,3,0,48000));
+    assert(h.add(600,1,67,0,false,1,3,0,48000));
+    assert(h.add(1000,1,67,0,false,1,3,0,48000));
+    for (int i=0;i<15;++i) { h.emitBlock(128, absSink); blockStart+=128; }
+    assert(absolute.size()==4 && absolute[0].on && absolute[1].on);
+    assert(!absolute[2].on && !absolute[3].on);
+    assert(absolute[2].sample-absolute[0].sample==600);
+    assert(absolute[3].sample-absolute[1].sample==700);
+    std::cout << "Live humanizer: 13 checks passed\n";
 }
