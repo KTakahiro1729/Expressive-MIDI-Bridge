@@ -215,10 +215,19 @@ The VST3 now defaults to **Live MIDI on this track**. Do **not** use `Load MIDI`
 2. Put (paste, drag, record) the existing piano MIDI part directly on **that Player track**.
 3. Create a **second** instrument track with the piano VSTi or built-in piano instrument.
 4. In the piano track's Inspector (F4), select **Expressive MIDI Player** as its Instrument Input (if Fender exposes the VST3 MIDI output). Enable input monitoring on the piano track.
-5. Start playback. Adjust the **Humanize strength**, **Timing**, and **Velocity range** in the player. At 0% strength, notes are passed through unchanged. No manual MIDI file loading is required.
+5. Start playback. Select **Identify hands**: **By pitch** (notes below MIDI C4 / 60 = left, at/above = right) or **By MIDI channel** (1 = right, 2 = left). If both hands share channel 1, pitch split works without MIDI editing but may misclassify crossed hands.
+6. Adjust **Right hand** and **Left hand** Humanize strength, Delay (ms), and Velocity range independently. 0% strength leaves that hand unchanged. The receiver instrument must accept both MIDI channels if channel mapping is used.
 
 For an **existing piano track**, keep its instrument but move/copy its MIDI part to the Player track. Mute the original MIDI part to avoid duplicated notes. This is a non-destructive source-clip workflow: the original MIDI remains editable on the Player track. The Player does **not** insert into Fender's native Note FX rack. Generic VST3 MIDI effects do not have the same-track Note FX routing available to proprietary Fender Note FX processors.
 
 The live settings use **rule-based deterministic timing delay and velocity variation**, not Pianist Transformer. The model-backed AI engine remains an offline Python path requiring additional development for automatic in-DAW capture and phrase generation. Timing changes are positive delay only (0-40 ms; set to 0 to disable). Note lengths and pedals remain unchanged in live mode. Live-note queue capacity is 4096; excess events pass through unchanged. Fender host MIDI-out routing still requires an actual host test.
+
+### Independent right/left hand controls (v1.2)
+
+- **By pitch (default):** notes below the adjustable split note are left hand; notes at/above are right hand. Default split is MIDI note 60 (C4); range 21–108. This is a pitch heuristic, **not** AI hand detection. Crossed hands and overlapping voice ranges may be classified incorrectly.
+- **By MIDI channel:** channel 1 = right hand, channel 2 = left hand, channels 3–16 = unchanged. Classifies by channel even when the hands cross in pitch. You can place both MIDI parts on the Player track if the DAW retains per-note channel assignments. The output MIDI channel is preserved; the destination piano must receive both channels (Omni/multi-channel).
+- Right and left each have independent **Humanize strength (0–100%)**, **Delay (0–40 ms)** and **Velocity range (0–32)** controls. 0% leaves that hand unchanged. Sustain/CC64, pitch bends, and other controllers pass through unmodified, and note durations stay unchanged.
+- When you change the mapping or split note during playback, the plug-in resets pending notes and sends all-notes-off to avoid stuck notes. The previous v1.1 **shared** controls are migrated to both hands when a saved project is opened; new projects persist independent hand settings.
+- This is still a **rule-based live MIDI effect implemented as a MIDI-output instrument**. It does not perform Pianist Transformer inference inside the VST3. Fender Studio Pro's routing from this plug-in to a second piano track is host-dependent and must be validated in the DAW.
 
 In the Source dropdown, **External MIDI file (legacy)** retains the old file-player behavior for projects that used it. Both modes store settings in the DAW project.
