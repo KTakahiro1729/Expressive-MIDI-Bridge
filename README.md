@@ -155,9 +155,9 @@ JUCE license: its open-source/paid licensing rules apply **in addition to** this
 ### Fender Studio Pro routing (host-side verification required)
 
 1. Add **Expressive MIDI Player** as a new virtual instrument on an instrument track. This track produces **silence** and MIDI events, not piano audio.
-2. Load your processed fixed-BPM `.mid` in the plugin's **Load MIDI…** button.
+2. Select the **Play a MIDI file (legacy)** tab, then load your processed fixed-BPM `.mid` with **Load MIDI file…** or by dragging it onto the plugin window.
 3. Add a **second instrument track** with your piano VSTi / Fender instrument. Choose the MIDI output of **Expressive MIDI Player** as the **input** for that track, if the host exposes it. Enable monitoring and route the sound source to your main audio bus.
-4. Play from the beginning of the session. Use **Start offset (beats)** to shift the clip forward (0 = bar 1 in a standard 4/4 session; 4 = start at bar 2). Use **Reload** after regenerating the `.mid`.
+4. Play from the beginning of the session. Use **Start position (beats)** to shift the clip forward (0 = bar 1 in a standard 4/4 session; 4 = start at bar 2). Use **Reload** after regenerating the `.mid`.
 
 The plugin retains the MIDI bytes inside the DAW project state (up to 32 MB), so the loaded clip does not depend only on an absolute file path. Reload uses the original path when available.
 
@@ -222,3 +222,19 @@ For an **existing piano track**, keep its instrument but move/copy its MIDI part
 The live settings use **rule-based deterministic timing delay and velocity variation**, not Pianist Transformer. The model-backed AI engine remains an offline Python path requiring additional development for automatic in-DAW capture and phrase generation. Timing changes are positive delay only (0-40 ms; set to 0 to disable). Note lengths and pedals remain unchanged in live mode. Live-note queue capacity is 4096; excess events pass through unchanged. Fender host MIDI-out routing still requires an actual host test.
 
 In the Source dropdown, **External MIDI file (legacy)** retains the old file-player behavior for projects that used it. Both modes store settings in the DAW project.
+
+## Plugin screen (v1.2)
+
+The editor was reorganised so that the routing and the current state are visible without reading this README:
+
+![Live mode, Japanese](docs/images/plugin-ui-live-ja.png)
+
+- **Header:** states that the plugin itself is silent and sends MIDI to a separate piano track. **English / 日本語** switches the display language (it follows the OS language until changed, and is saved in the project). **? Setup guide** shows step-by-step routing and troubleshooting for the active mode.
+- **Mode tabs** replace the old *Source* dropdown: **Humanize this track's MIDI (recommended)** and **Play a MIDI file (legacy)**.
+- **Signal-flow panel:** transport state, host BPM and beat, plus **MIDI IN** / **MIDI OUT** lamps that blink when note-ons pass through. Below them, a coloured hint explains what to do next (for example *no notes are arriving: is the MIDI part on this track?*, or *waiting: the file starts at bar 5*). The lamps show MIDI flowing into and out of the plugin; they cannot confirm that the host routed the output to the piano track.
+- **Live controls:** presets **Off / Subtle / Natural / Strong**, and *Amount*, *Timing spread* and *Velocity spread*. The line under each slider shows the effective maximum at the current Amount (Amount x setting). Double-click a slider to reset it; hover for tooltips. Parameter ranges and stored values are unchanged from v1.1.
+- **MIDI file mode:** drag & drop of `.mid` files, note count and length of the loaded file, and the start position shown in both beats and 4/4 bars.
+
+![MIDI file mode, Japanese](docs/images/plugin-ui-file-ja.png)
+
+Japanese text relies on JUCE 8's automatic font fallback to a system CJK font. The screenshots were rendered on Linux with Noto CJK; the editor has been compiled with JUCE 8.0.10 on Linux, but not yet tested inside Fender Studio Pro on Windows/macOS.

@@ -77,6 +77,11 @@ bool ExpressiveMidiPlayerProcessor::loadMidiBytes(const void* bytes, size_t size
             if (a.ppq != b.ppq) return a.ppq < b.ppq;
             return a.message.isNoteOff() && !b.message.isNoteOff();
         });
+    int notes = 0;
+    for (const auto& event : fresh->events)
+        if (event.message.isNoteOn()) ++notes;
+    clipNoteCount.store(notes);
+    clipLengthBeats.store(fresh->events.empty() ? 0.0 : fresh->events.back().ppq);
     embeddedMidi = juce::MemoryBlock(bytes, size);
     std::atomic_store(&clip, std::shared_ptr<const Clip>(std::move(fresh)));
     clipRevision.fetch_add(1);
@@ -99,6 +104,17 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
                             && std::isfinite(ppq) && std::isfinite(bpm) && bpm > 0;
     const auto samples = audio.getNumSamples();
     const auto rate = getSampleRate();
+    hostHasClock.store(validClock, std::memory_order_relaxed);
+    hostPlaying.store(playing, std::memory_order_relaxed);
+    hostBpm.store(validClock ? bpm : 0.0, std::memory_order_relaxed);
+    hostPpq.store(validClock ? ppq : 0.0, std::memory_order_relaxed);
+    const auto countNotes = [](const juce::MidiBuffer& buffer)
+    {
+        std::uint32_t n = 0;
+        for (const auto metadata : buffer)
+            if (metadata.getMessage().isNoteOn()) ++n;
+        return n;
+    };
     if (selectedMode != previousMode)
     {
         liveHumanizer.reset();
@@ -124,6 +140,8 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
         }
         juce::MidiBuffer incoming;
         incoming.swapWith(messages);
+        if (const auto n = countNotes(incoming))
+            midiInCounter.fetch_add(n, std::memory_order_relaxed);
         for (const auto metadata : incoming)
         {
             const auto msg = metadata.getMessage();
@@ -146,6 +164,8 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
             else
                 messages.addEvent(juce::MidiMessage::noteOff(note.channel, note.pitch), at);
         });
+        if (const auto n = countNotes(messages))
+            midiOutCounter.fetch_add(n, std::memory_order_relaxed);
         wasLivePlaying = playing;
         expectedLivePpq = validClock && rate > 0
             ? ppq + samples / rate * bpm / 60.0 : -1.0;
@@ -198,6 +218,8 @@ void ExpressiveMidiPlayerProcessor::processBlock(juce::AudioBuffer<float>& audio
         {
             messages.addEvent(event.message, offset);
         });
+    if (const auto n = countNotes(messages))
+        midiOutCounter.fetch_add(n, std::memory_order_relaxed);
     nextExpectedPpq = endPpq;
     wasPlaying = true;
 }
@@ -212,6 +234,7 @@ void ExpressiveMidiPlayerProcessor::getStateInformation(juce::MemoryBlock& data)
     state.setAttribute("strength", strength.load());
     state.setAttribute("timingMs", timingMs.load());
     state.setAttribute("velocityRange", velocityRange.load());
+    state.setAttribute("uiLanguage", uiLanguage.load());
     if (embeddedMidi.getSize() != 0)
         state.setAttribute("midiBase64", embeddedMidi.toBase64Encoding());
     copyXmlToBinary(state, data);
@@ -228,6 +251,7 @@ void ExpressiveMidiPlayerProcessor::setStateInformation(const void* data, int si
             strength.store(juce::jlimit(0.0, 1.0, xml->getDoubleAttribute("strength", 0.65)));
             timingMs.store(juce::jlimit(0.0, 40.0, xml->getDoubleAttribute("timingMs", 16.0)));
             velocityRange.store(juce::jlimit(0, 32, xml->getIntAttribute("velocityRange", 12)));
+            setUiLanguage(xml->getIntAttribute("uiLanguage", -1));
             juce::String error;
             if (encoded.isNotEmpty())
             {

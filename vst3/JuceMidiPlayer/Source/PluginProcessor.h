@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include "LiveHumanizer.h"
+#include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -47,6 +49,32 @@ public:
     void setVelocityRange(int v) { velocityRange.store(juce::jlimit(0, 32, v)); }
     int getVelocityRange() const { return velocityRange.load(); }
 
+    // Read-only status for the editor (written on the audio thread, polled by a UI timer).
+    struct Activity
+    {
+        std::uint32_t midiIn = 0, midiOut = 0; // monotonically increasing note counters
+        bool hasClock = false, playing = false;
+        double bpm = 0.0, ppq = 0.0;
+    };
+    Activity getActivity() const noexcept
+    {
+        Activity a;
+        a.midiIn = midiInCounter.load(std::memory_order_relaxed);
+        a.midiOut = midiOutCounter.load(std::memory_order_relaxed);
+        a.hasClock = hostHasClock.load(std::memory_order_relaxed);
+        a.playing = hostPlaying.load(std::memory_order_relaxed);
+        a.bpm = hostBpm.load(std::memory_order_relaxed);
+        a.ppq = hostPpq.load(std::memory_order_relaxed);
+        return a;
+    }
+    int loadedNoteCount() const { return clipNoteCount.load(); }
+    double loadedLengthBeats() const { return clipLengthBeats.load(); }
+    bool hasLoadedClip() const { return clipNoteCount.load() > 0 || clipLengthBeats.load() > 0.0; }
+
+    // Editor-only preference, saved with the project. 0 = English, 1 = Japanese, -1 = follow OS.
+    void setUiLanguage(int v) { uiLanguage.store(v < -1 || v > 1 ? -1 : v); }
+    int getUiLanguage() const { return uiLanguage.load(); }
+
 private:
     struct ScheduledEvent
     {
@@ -66,6 +94,12 @@ private:
     std::atomic<int> mode { 0 }; // 0 = live MIDI from track; 1 = legacy MIDI file
     std::atomic<double> strength { 0.65 }, timingMs { 16.0 };
     std::atomic<int> velocityRange { 12 };
+    std::atomic<std::uint32_t> midiInCounter { 0 }, midiOutCounter { 0 };
+    std::atomic<bool> hostHasClock { false }, hostPlaying { false };
+    std::atomic<double> hostBpm { 0.0 }, hostPpq { 0.0 };
+    std::atomic<int> clipNoteCount { 0 };
+    std::atomic<double> clipLengthBeats { 0.0 };
+    std::atomic<int> uiLanguage { -1 };
     expressive::LiveHumanizer liveHumanizer;
     int previousMode = -1;
     bool wasLivePlaying = false;
