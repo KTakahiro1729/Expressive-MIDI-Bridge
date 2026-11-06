@@ -29,7 +29,7 @@ juce_add_plugin(ExpressiveMidiPlayer
 juce_generate_juce_header(ExpressiveMidiPlayer)
 
 target_sources(ExpressiveMidiPlayer PRIVATE
-    Source/PluginProcessor.cpp Source/PluginEditor.cpp)
+    Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/ClipSession.cpp Source/ClipPanel.cpp)
 target_compile_features(ExpressiveMidiPlayer PRIVATE cxx_std_17)
 # The editor contains UTF-8 Japanese UI strings; MSVC otherwise decodes sources with the ANSI code page.
 if (MSVC)

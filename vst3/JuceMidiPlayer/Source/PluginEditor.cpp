@@ -7,22 +7,13 @@
 
 namespace
 {
-namespace colours
-{
-const juce::Colour background { 0xff1e2127 };
-const juce::Colour panel      { 0xff282c34 };
-const juce::Colour panelEdge  { 0xff3a404b };
-const juce::Colour text       { 0xffe6e6e6 };
-const juce::Colour dim        { 0xff9aa3b0 };
-const juce::Colour accent     { 0xff4fa3ff };
-const juce::Colour ok         { 0xff4cd98a };
-const juce::Colour warning    { 0xffffc05c };
-const juce::Colour error      { 0xffff6b6b };
-const juce::Colour lampOff    { 0xff444a55 };
-}
+namespace colours = ui::colours;
+using ui::styleLabel;
+using ui::formatNumber;
 
-constexpr int editorWidth = 600;
+constexpr int editorWidth = 640;
 constexpr int editorHeight = 520;
+constexpr int clipEditorHeight = 64 + 36 + 12 + ClipPanel::preferredHeight + 14;
 constexpr int margin = 14;
 constexpr std::uint32_t lampHoldMs = 180;
 constexpr std::uint32_t silenceWarningMs = 2500;
@@ -40,18 +31,6 @@ juce::Colour toneColour(int tone)
     }
 }
 
-void styleLabel(juce::Label& label, float size, juce::Colour colour, bool bold = false)
-{
-    label.setFont(juce::FontOptions(size, bold ? juce::Font::bold : juce::Font::plain));
-    label.setColour(juce::Label::textColourId, colour);
-    label.setJustificationType(juce::Justification::centredLeft);
-    label.setMinimumHorizontalScale(1.0f);
-}
-
-juce::String formatNumber(double v, int decimals)
-{
-    return juce::String(v, decimals).trimCharactersAtEnd("0").trimCharactersAtEnd(".");
-}
 }
 
 const std::array<ExpressiveMidiPlayerEditor::Preset, 4> ExpressiveMidiPlayerEditor::presets {{
@@ -67,14 +46,19 @@ ExpressiveMidiPlayerEditor::ExpressiveMidiPlayerEditor(ExpressiveMidiPlayerProce
     const auto language = processor.getUiLanguage();
     japanese = language == 1
             || (language < 0 && juce::SystemStats::getUserLanguage().startsWithIgnoreCase("ja"));
+    lang.japanese = japanese;
+    clipPanel = std::make_unique<ClipPanel>(processor, lang);
+    addChildComponent(*clipPanel);
 
-    for (auto* b : { &languageButton, &guideButton, &liveTab, &fileTab, &loadButton, &reloadButton })
+    for (auto* b : { &languageButton, &guideButton, &clipTab, &liveTab, &fileTab, &loadButton, &reloadButton })
         addAndMakeVisible(*b);
 
     languageButton.onClick = [this]
     {
         japanese = !japanese;
+        lang.japanese = japanese;
         processor.setUiLanguage(japanese ? 1 : 0);
+        clipPanel->refreshTexts();
         refreshTexts();
     };
 
@@ -86,13 +70,14 @@ ExpressiveMidiPlayerEditor::ExpressiveMidiPlayerEditor(ExpressiveMidiPlayerProce
         refreshVisibility();
     };
 
-    for (auto* tab : { &liveTab, &fileTab })
+    for (auto* tab : { &clipTab, &liveTab, &fileTab })
     {
         tab->setRadioGroupId(1);
         tab->setClickingTogglesState(true);
         tab->setColour(juce::TextButton::buttonOnColourId, colours::accent.darker(0.35f));
         tab->setColour(juce::TextButton::buttonColourId, colours::panel);
     }
+    clipTab.onClick = [this] { if (clipTab.getToggleState()) selectMode(ExpressiveMidiPlayerProcessor::modeClip); };
     liveTab.onClick = [this] { if (liveTab.getToggleState()) selectMode(0); };
     fileTab.onClick = [this] { if (fileTab.getToggleState()) selectMode(1); };
 
@@ -198,14 +183,11 @@ ExpressiveMidiPlayerEditor::ExpressiveMidiPlayerEditor(ExpressiveMidiPlayerProce
     guide.setColour(juce::TextEditor::outlineColourId, colours::panelEdge);
     guide.setColour(juce::TextEditor::textColourId, colours::text);
 
-    liveTab.setToggleState(isLive(), juce::dontSendNotification);
-    fileTab.setToggleState(!isLive(), juce::dontSendNotification);
-
     const auto activity = processor.getActivity();
     lastIn = activity.midiIn;
     lastOut = activity.midiOut;
 
-    setSize(editorWidth, editorHeight);
+    updateSizeForMode();
     refreshTexts();
     startTimerHz(20);
 }
@@ -237,7 +219,13 @@ void ExpressiveMidiPlayerEditor::selectMode(int mode)
 {
     processor.setMode(mode);
     message.clear();
+    updateSizeForMode();
     refreshTexts();
+}
+
+void ExpressiveMidiPlayerEditor::updateSizeForMode()
+{
+    setSize(editorWidth, isClip() ? clipEditorHeight : editorHeight);
 }
 
 void ExpressiveMidiPlayerEditor::applyPreset(const Preset& preset)
@@ -268,10 +256,12 @@ void ExpressiveMidiPlayerEditor::refreshPresetHighlight()
 
 void ExpressiveMidiPlayerEditor::loadFile(const juce::File& file)
 {
-    if (isLive())
+    if (processor.getMode() != ExpressiveMidiPlayerProcessor::modeFile)
     {
-        processor.setMode(1);
-        refreshTexts();
+        // Dropping a file in live or clip mode starts the recommended clip workflow.
+        if (!isClip()) selectMode(ExpressiveMidiPlayerProcessor::modeClip);
+        clipPanel->loadFile(file);
+        return;
     }
     juce::String error;
     if (processor.loadMidi(file, error))
@@ -375,15 +365,20 @@ void ExpressiveMidiPlayerEditor::refreshTexts()
     guideButton.setTooltip(tr("Show step-by-step routing instructions for the DAW",
                               "DAW での接続手順を表示します"));
 
-    liveTab.setButtonText(tr("Humanize this track's MIDI (recommended)",
-                             "このトラックのMIDIを加工（おすすめ）"));
-    liveTab.setTooltip(tr("Put your piano MIDI part on this track. It is reshaped in real time.",
-                          "ピアノのMIDIパートをこのトラックに置くと、再生中にリアルタイムで加工します。"));
-    fileTab.setButtonText(tr("Play a MIDI file (legacy)", "MIDIファイルを再生（旧方式）"));
+    clipTab.setButtonText(tr("Make expressive & drag back (recommended)", "加工してドラッグで戻す（おすすめ）"));
+    clipTab.setTooltip(tr("No routing needed: the result is ordinary MIDI that you drag onto your piano track.",
+                          "接続設定は不要です。結果は普通のMIDIなので、ピアノのトラックへドラッグするだけです。"));
+    liveTab.setButtonText(tr("Real-time", "リアルタイム"));
+    liveTab.setTooltip(tr("Advanced: reshapes this track's MIDI while playing. Needs MIDI routing to a second track.",
+                          "上級者向け: 再生中にこのトラックのMIDIを加工します。2本目のトラックへのMIDI接続が必要です。"));
+    fileTab.setButtonText(tr("File player (old)", "ファイル再生（旧）"));
     fileTab.setTooltip(tr("Play a .mid file rendered by the Python tool, in sync with the DAW.",
                           "Python ツールで作った .mid を DAW の再生位置に合わせて鳴らします。"));
+    clipTab.setToggleState(isClip(), juce::dontSendNotification);
     liveTab.setToggleState(isLive(), juce::dontSendNotification);
-    fileTab.setToggleState(!isLive(), juce::dontSendNotification);
+    fileTab.setToggleState(processor.getMode() == ExpressiveMidiPlayerProcessor::modeFile, juce::dontSendNotification);
+    // The old file player stays reachable only for projects that already use it.
+    fileTab.setVisible(processor.getMode() == ExpressiveMidiPlayerProcessor::modeFile);
 
     presetLabel.setText(tr("Presets", "プリセット"), juce::dontSendNotification);
     for (size_t i = 0; i < presets.size(); ++i)
@@ -426,8 +421,11 @@ void ExpressiveMidiPlayerEditor::refreshTexts()
 void ExpressiveMidiPlayerEditor::refreshVisibility()
 {
     const bool live = isLive();
+    const bool clip = isClip();
     const bool showLive = live && !guideVisible;
-    const bool showFile = !live && !guideVisible;
+    const bool showFile = !live && !clip && !guideVisible;
+    clipPanel->setVisible(clip && !guideVisible);
+    hintLabel.setVisible(!clip);
     presetLabel.setVisible(showLive);
     for (auto& b : presetButtons) b.setVisible(showLive);
     for (auto* c : std::initializer_list<juce::Component*> { &strengthLabel, &timingLabel, &velocityLabel,
@@ -445,6 +443,38 @@ void ExpressiveMidiPlayerEditor::refreshVisibility()
 
 juce::String ExpressiveMidiPlayerEditor::guideText() const
 {
+    if (isClip())
+        return tr(
+            "HOW IT WORKS (recommended)\n\n"
+            "No MIDI routing is needed. This plugin turns MIDI into expressive MIDI, and you drag the result "
+            "onto your normal piano track.\n\n"
+            "1. Bring in the MIDI, either way:\n"
+            "   a) Export the part from the DAW as a .mid file and drop it on this window (or use Open).\n"
+            "   b) Put the part on THIS track, press \"Capture from this track\", then play it in the DAW. "
+            "Capture ends when you press Stop.\n"
+            "2. Choose how it is played. Rule-based styles update instantly. The AI (Pianist Transformer) needs a "
+            "one-time setup and runs outside the DAW.\n"
+            "3. Drag the box in step 3 onto your piano track (captured MIDI: drop at the bar shown). Mute the "
+            "original part and listen.\n"
+            "4. Not happy? Change step 2 and drag again. The result is normal MIDI that you can edit.\n\n"
+            "If dragging does not work in your DAW, use \"Save as...\" and import the file.\n"
+            "Files are also kept in Documents/Expressive MIDI Bridge.\n\n"
+            "This plugin never makes sound by itself.",
+            "使い方（おすすめの方法）\n\n"
+            "MIDI の接続設定はいりません。このプラグインで MIDI に表情を付け、結果をいつものピアノのトラックへ"
+            "ドラッグするだけです。\n\n"
+            "1. 元の MIDI を用意します（どちらか）。\n"
+            "   a) DAW でパートを .mid に書き出し、この画面にドロップします（「開く」でも可）。\n"
+            "   b) パートを「このトラック」に置き、「このトラックから取り込む」を押してから DAW で再生します。"
+            "停止すると取り込みが終わります。\n"
+            "2. 弾き方を選びます。ルールベースはすぐ反映されます。AI（Pianist Transformer）は初回だけ"
+            "セットアップが必要で、DAW の外で実行されます。\n"
+            "3. 手順3の枠をつかんで、ピアノのトラックへドラッグします（取り込んだ場合は表示された小節に置きます）。"
+            "元のパートをミュートして聴きます。\n"
+            "4. 気に入らなければ手順2を変えて、もう一度ドラッグします。結果は普通の MIDI なので編集もできます。\n\n"
+            "DAW でドラッグがうまくいかない時は「名前を付けて保存」で保存し、そのファイルを読み込んでください。\n"
+            "ファイルは「書類／Expressive MIDI Bridge」フォルダにも残ります。\n\n"
+            "このプラグイン自体は音を出しません。");
     if (isLive())
         return tr(
             "HOW TO CONNECT (live mode)\n\n"
@@ -542,6 +572,8 @@ void ExpressiveMidiPlayerEditor::refreshStatus()
         hint = message;
         tone = messageTone;
     }
+    else if (isClip())
+        hint.clear();
     else if (isLive())
     {
         if (!a.playing)
@@ -620,9 +652,23 @@ void ExpressiveMidiPlayerEditor::paint(juce::Graphics& g)
     g.drawText("Expressive MIDI Player", margin, 10, 360, 26, juce::Justification::centredLeft);
     g.setColour(colours::warning);
     g.setFont(juce::FontOptions(13.0f));
-    g.drawText(tr("Makes no sound: it sends MIDI to a separate piano track.",
-                  "音は出しません。MIDIを加工して、別のピアノトラックへ送ります。"),
+    g.drawText(isClip() ? tr("Makes no sound: it adds expression to MIDI, which you drag back to your piano track.",
+                             "音は出しません。MIDIに表情を付けて、いつものピアノのトラックへ戻します。")
+                        : tr("Makes no sound: it sends MIDI to a separate piano track.",
+                             "音は出しません。MIDIを加工して、別のピアノトラックへ送ります。"),
                margin, 36, getWidth() - 2 * margin, 20, juce::Justification::centredLeft);
+
+    if (isClip() || guideVisible)
+    {
+        if (dragHover)
+        {
+            g.setColour(colours::accent.withAlpha(0.12f));
+            g.fillRect(getLocalBounds());
+            g.setColour(colours::accent);
+            g.drawRect(getLocalBounds(), 3);
+        }
+        if (isClip()) return;
+    }
 
     // Status panel
     g.setColour(colours::panel);
@@ -735,9 +781,16 @@ void ExpressiveMidiPlayerEditor::resized()
 
     area.removeFromTop(64);
     auto tabs = area.removeFromTop(36);
-    liveTab.setBounds(tabs.removeFromLeft(tabs.getWidth() * 3 / 5).reduced(0, 0).withTrimmedRight(4));
-    fileTab.setBounds(tabs.withTrimmedLeft(4));
+    const bool legacyVisible = fileTab.isVisible();
+    clipTab.setBounds(tabs.removeFromLeft(tabs.getWidth() * (legacyVisible ? 46 : 64) / 100).withTrimmedRight(4));
+    if (legacyVisible)
+    {
+        fileTab.setBounds(tabs.removeFromRight(tabs.getWidth() / 2).withTrimmedLeft(4));
+    }
+    liveTab.setBounds(tabs.withTrimmedLeft(4).withTrimmedRight(legacyVisible ? 4 : 0));
 
+    const auto clipArea = area.withTrimmedTop(12).withTrimmedBottom(14);
+    clipPanel->setBounds(clipArea);
     area.removeFromTop(10);
     statusArea = area.removeFromTop(150);
     auto inner = statusArea.reduced(12, 0);
@@ -748,7 +801,7 @@ void ExpressiveMidiPlayerEditor::resized()
 
     area.removeFromTop(14);
     auto content = area.withTrimmedBottom(12);
-    guide.setBounds(content);
+    guide.setBounds(isClip() ? clipArea : content);
 
     // Live mode
     {

@@ -1,6 +1,8 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "ClipPanel.h"
+#include "UiStyle.h"
 #include <array>
 #include <cstdint>
 
@@ -45,10 +47,13 @@ private:
     juce::String tr(const char* en, const char* ja) const;
     juce::String fileSummary() const;
     juce::String guideText() const;
-    bool isLive() const { return processor.getMode() == 0; }
+    bool isLive() const { return processor.getMode() == ExpressiveMidiPlayerProcessor::modeLive; }
+    bool isClip() const { return processor.getMode() == ExpressiveMidiPlayerProcessor::modeClip; }
+    void updateSizeForMode();
 
     ExpressiveMidiPlayerProcessor& processor;
     bool japanese = false;
+    ui::Lang lang;
     bool dragHover = false;
     bool guideVisible = false;
 
@@ -66,7 +71,8 @@ private:
     Tone hintTone = Tone::neutral;
 
     juce::TextButton languageButton, guideButton;
-    juce::TextButton liveTab, fileTab;
+    juce::TextButton clipTab, liveTab, fileTab;
+    std::unique_ptr<ClipPanel> clipPanel;
     juce::Label hintLabel;
 
     juce::Label presetLabel;
