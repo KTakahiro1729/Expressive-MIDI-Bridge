@@ -29,7 +29,8 @@ For an existing VST3 build, unzip the appropriate platform package, install the 
 | Pianist Transformer adapter API/signature | Matched upstream published `src.model.generate` and `src.inference.inference`; mock-backed contract test passes |
 | **Real Pianist Transformer model inference** | **Not tested here**: upstream model code/dependencies/270 MB weights unavailable in this isolated environment. Install locally. |
 | C++ MIDI scheduler, frame/beat timing | Compiled and executed with `c++ -std=c++17`; tests pass |
-| **VST3 dynamic library / Fender Studio Pro real host** | **Not compiled or tested here**: JUCE checkout and host unavailable. CMake build provided for developer's machine. |
+| VST3 dynamic library | Compiled on Linux with JUCE 8.0.10; Windows/macOS built by CI |
+| **Fender Studio Pro real host** | **Not tested**: host unavailable here. |
 
 **Do not mistake the baseline for AI.** The AI backend is `pianist-transformer` and requires the real upstream fine-tuned checkpoint, *not* the base pre-trained model.
 
@@ -155,9 +156,9 @@ JUCE license: its open-source/paid licensing rules apply **in addition to** this
 ### Fender Studio Pro routing (host-side verification required)
 
 1. Add **Expressive MIDI Player** as a new virtual instrument on an instrument track. This track produces **silence** and MIDI events, not piano audio.
-2. Load your processed fixed-BPM `.mid` in the plugin's **Load MIDI…** button.
+2. Select the **Play a MIDI file (legacy)** tab, then load your processed fixed-BPM `.mid` with **Load MIDI file…** or by dragging it onto the plugin window.
 3. Add a **second instrument track** with your piano VSTi / Fender instrument. Choose the MIDI output of **Expressive MIDI Player** as the **input** for that track, if the host exposes it. Enable monitoring and route the sound source to your main audio bus.
-4. Play from the beginning of the session. Use **Start offset (beats)** to shift the clip forward (0 = bar 1 in a standard 4/4 session; 4 = start at bar 2). Use **Reload** after regenerating the `.mid`.
+4. Play from the beginning of the session. Use **Start position (beats)** to shift the clip forward (0 = bar 1 in a standard 4/4 session; 4 = start at bar 2). Use **Reload** after regenerating the `.mid`.
 
 The plugin retains the MIDI bytes inside the DAW project state (up to 32 MB), so the loaded clip does not depend only on an absolute file path. Reload uses the original path when available.
 
@@ -173,6 +174,8 @@ python -m pytest -q
 # Toolchain-independent scheduler component:
 c++ -std=c++17 -Wall -Wextra -Werror tests/scheduler_test.cpp -o /tmp/expressive-scheduler-test
 /tmp/expressive-scheduler-test
+c++ -std=c++17 -Wall -Wextra -Werror tests/clip_model_test.cpp -o /tmp/expressive-clip-test
+/tmp/expressive-clip-test
 ```
 
 The Python test suite includes conversion invariants, AI/score blending, CC64 semantics, tempo mapping, mismatch errors, a real CLI invocation and a **mock** of the upstream API (the mock does not run the pretrained model).
@@ -209,7 +212,7 @@ References:
 
 ## Live MIDI directly from a Fender Studio Pro track (v1.1)
 
-The VST3 now defaults to **Live MIDI on this track**. Do **not** use `Load MIDI` for this mode.
+Since v2.0 this mode is the **Real-time** tab (new instances start in the clip workflow described below). It still requires host MIDI-out routing.
 
 1. Create an instrument track with **Expressive MIDI Player** as its instrument.
 2. Put (paste, drag, record) the existing piano MIDI part directly on **that Player track**.
@@ -222,3 +225,27 @@ For an **existing piano track**, keep its instrument but move/copy its MIDI part
 The live settings use **rule-based deterministic timing delay and velocity variation**, not Pianist Transformer. The model-backed AI engine remains an offline Python path requiring additional development for automatic in-DAW capture and phrase generation. Timing changes are positive delay only (0-40 ms; set to 0 to disable). Note lengths and pedals remain unchanged in live mode. Live-note queue capacity is 4096; excess events pass through unchanged. Fender host MIDI-out routing still requires an actual host test.
 
 In the Source dropdown, **External MIDI file (legacy)** retains the old file-player behavior for projects that used it. Both modes store settings in the DAW project.
+
+## Recommended workflow in the plugin: make expressive & drag back (v2.0)
+
+New plugin instances open in **Make expressive & drag back**. This workflow does **not** depend on VST3 MIDI-out routing, which is the least reliable part of the earlier setup. The result is ordinary MIDI that you place on your usual piano track (LABS, Pianoteq, Kontakt, a built-in instrument, anything).
+
+![Clip workflow, Japanese](docs/images/plugin-clip-ja.png)
+
+1. **Bring in the MIDI**, either way:
+   - export the part from the DAW as a `.mid` file, then drop it onto the plugin window (or click *Open*). User reports say that Studio One-based DAWs do not let you drag a part straight into a plugin window, hence the export step;
+   - or put the part on the plugin's own track, click **Capture from this track** and play it in the DAW. Capture stops when you press Stop or when a loop jumps back. The result remembers the bar where it started.
+2. **Choose how it is played.**
+   - *Rule-based* (Classical / Pop / Jazz, expression 0–100 %, *Try another take*): updates instantly. It is a C++ port of the Python baseline (chord tones move together, bar accents, 4-bar phrase arc, slight duration changes; pitch, note count and pedal events are kept). The C++ random generator differs from Python's, so the same seed does not give note-identical output to the CLI.
+   - *AI: Pianist Transformer*: the plugin runs `python -m expressive_midi render --backend pianist-transformer ...` as a separate process, so the DAW keeps running. One-time setup: run `scripts/setup_ai.sh` / `scripts/setup_ai.ps1` (it now also installs this package into the AI venv), then set **AI settings → PianistTransformer folder**. **Check environment** runs `doctor` and explains what is missing.
+3. **Put it back into the DAW.** The panel shows a before/after piano roll with a velocity lane and the average and maximum timing shift. Drag the box onto your piano track. A captured clip has to be dropped at the start of the bar that is shown; a file should be dropped where the original part starts. Then mute the original part. If drag & drop does not work in your host, use **Save as...**. Every drag also writes the file to `Documents/Expressive MIDI Bridge/`.
+
+![Captured clip, drop at bar 5](docs/images/plugin-clip-captured-ja.png)
+
+The source clip, the settings and the last AI result are saved in the DAW project. AI paths are saved per computer in the user settings folder (`ExpressiveMidiBridge.settings`).
+
+**Other modes.** *Real-time* is the v1.1 live humanizer (signal-flow panel, MIDI IN/OUT lamps, hints, presets). It still needs MIDI routing to a second track. The *File player (old)* tab is shown only for projects that already use it.
+
+**Verified here (Linux, JUCE 8.0.10):** the VST3 builds; `tests/clip_model_test.cpp` passes (pairing, identity at 0 %, determinism, count/pitch/pedal preservation, chord grouping, no same-pitch overlap); a test harness took screenshots of the editor states, captured MIDI through `processBlock`, exported the result, and restored it from saved project state; the AI path ran end to end against a **fake** PianistTransformer repository (real subprocess, CLI and blending; no real model). **Not verified:** drag & drop into Fender Studio Pro, Windows/macOS behaviour, and real model inference.
+
+Japanese text relies on JUCE 8's automatic font fallback to a system CJK font.
