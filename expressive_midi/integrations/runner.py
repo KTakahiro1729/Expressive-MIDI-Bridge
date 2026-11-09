@@ -26,6 +26,10 @@ def main():
     from src.model.pianoformer import PianoT5Gemma
 
     device = args.device
+    if device == 'auto':
+        mps = getattr(torch.backends, 'mps', None)
+        device = 'cuda' if torch.cuda.is_available() else (
+            'mps' if mps is not None and mps.is_available() else 'cpu')
     if device == 'cuda' and not torch.cuda.is_available():
         raise RuntimeError('CUDA requested but not available')
     if device == 'mps' and not torch.backends.mps.is_available():

@@ -74,7 +74,7 @@ def main(argv=None):
     p.add_argument('--repo', help='PianistTransformer repo (required for AI backend)')
     p.add_argument('--checkpoint', help='Checkpoint directory (default: repo/models/sft)')
     p.add_argument('--model-python', help='Python executable in PianistTransformer environment')
-    p.add_argument('--device', default='cpu', choices=['cpu','cuda','mps'])
+    p.add_argument('--device', default='cpu', choices=['auto','cpu','cuda','mps'])
     p.add_argument('--temperature', type=float, default=1.0)
     p.add_argument('--top-p', type=float, default=.95)
     p.add_argument('--report', action='store_true')
