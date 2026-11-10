@@ -104,27 +104,50 @@ def _match_notes(source_notes, target_notes, tm_original):
             for group, b in zip(groups, target_by_pitch[pitch]) for a in group]
 
 
-def _bar_length_seconds(midi: mido.MidiFile, bpm: float) -> float:
-    for track in midi.tracks:
+def bar_lines_seconds(score: mido.MidiFile, until_sec: float) -> list[float]:
+    """Bar-line times (seconds) of the score, following every time-signature and
+    tempo change. Bars restart at each time-signature event, as MIDI places them
+    at bar lines. The list runs one bar past ``until_sec``."""
+    tm = TempoMap(score)
+    tpb = score.ticks_per_beat
+    changes: dict[int, tuple[int, int]] = {}
+    for track in score.tracks:
+        tick = 0
         for msg in track:
-            if msg.type == 'time_signature':
-                return msg.numerator * 4 / msg.denominator * 60 / bpm
-    return 4 * 60 / bpm
+            tick += msg.time
+            if msg.type == 'time_signature' and msg.numerator > 0 and msg.denominator > 0:
+                changes[tick] = (msg.numerator, msg.denominator)
+    if 0 not in changes:
+        changes[0] = (4, 4)
+    starts = sorted(changes)
+    lines: list[float] = []
+    for i, start in enumerate(starts):
+        num, den = changes[start]
+        bar_ticks = num * 4 / den * tpb
+        stop = starts[i + 1] if i + 1 < len(starts) else None
+        k = 0
+        while True:
+            tick = start + k * bar_ticks
+            if stop is not None and tick >= stop:
+                break
+            sec = tm.to_seconds(tick)
+            lines.append(sec)
+            if stop is None and sec > until_sec:
+                break
+            k += 1
+    return sorted(set(round(t, 6) for t in lines))
 
 
-def bar_anchors(pairs, bar: float, beat: float) -> tuple[list[float], list[float]]:
-    """Score bar-line times and where the performance is at each of them.
+def bar_anchors(pairs, score_t: list[float], beat: float) -> tuple[list[float], list[float]]:
+    """Where the performance is at each score bar line.
 
     The performance position at a bar line is the median offset of the notes the
     score puts on that downbeat, or of the notes within half a beat of it when the
     downbeat is silent. Bars without nearby notes are interpolated. The result is
     strictly increasing, so the warp it defines keeps the note order.
     """
-    if not pairs:
+    if not pairs or not score_t:
         return [], []
-    last = max(a for a, _ in pairs)
-    count = int(last // bar) + 2
-    score_t = [k * bar for k in range(count)]
     offsets: list[float | None] = []
     for t in score_t:
         exact = [b - a for a, b in pairs if abs(a - t) < 0.02]
@@ -142,12 +165,13 @@ def bar_anchors(pairs, bar: float, beat: float) -> tuple[list[float], list[float
             elif after is None:
                 offsets[k] = offsets[before]
             else:
-                w = (k - before) / (after - before)
+                w = (score_t[k] - score_t[before]) / (score_t[after] - score_t[before])
                 offsets[k] = offsets[before] * (1 - w) + offsets[after] * w
     perf_t = [t + d for t, d in zip(score_t, offsets)]
     for k in range(1, len(perf_t)):
-        perf_t[k] = max(perf_t[k], perf_t[k - 1] + 0.2 * bar)
-    return score_t, perf_t
+        gap = 0.2 * (score_t[k] - score_t[k - 1])
+        perf_t[k] = max(perf_t[k], perf_t[k - 1] + gap)
+    return list(score_t), perf_t
 
 
 def _warp(sec: float, perf_t: list[float], score_t: list[float]) -> float:
@@ -161,15 +185,16 @@ def _warp(sec: float, perf_t: list[float], score_t: list[float]) -> float:
     return score_t[k] + (sec - perf_t[k]) * (score_t[k + 1] - score_t[k]) / span
 
 
-def align_to_bars(original: mido.MidiFile, performed: mido.MidiFile, pairs_sec, bpm: float) -> mido.MidiFile:
+def align_to_bars(score: mido.MidiFile, performed: mido.MidiFile, pairs_sec, bpm: float) -> mido.MidiFile:
     """Return the performance with its tempo drift removed bar by bar.
 
     Every bar line of the performance is moved onto the score's bar line; inside a
     bar the model's timing (rubato, chord spread, micro-timing) and its pedal are
-    stretched along with it. Both files must already have the same constant tempo.
+    stretched along with it. ``score`` is the original score (its own tempo and
+    time-signature map define the bar lines); ``performed`` has the constant DAW tempo.
     """
-    bar = _bar_length_seconds(original, bpm)
-    score_t, perf_t = bar_anchors(pairs_sec, bar, 60 / bpm)
+    last = max((a for a, _ in pairs_sec), default=0.0)
+    score_t, perf_t = bar_anchors(pairs_sec, bar_lines_seconds(score, last), 60 / bpm)
     if not score_t:
         return performed
     tm = TempoMap(performed)
@@ -225,7 +250,7 @@ def blend_performance(score: mido.MidiFile, performance: mido.MidiFile,
     pairs = _match_notes(source_notes, target_notes, tm_original)
     if align == 'bars':
         seconds = [(tm_original.to_seconds(a.onset_tick), tm_perf.to_seconds(b.onset_tick)) for a, b in pairs]
-        performed = align_to_bars(original, performed, seconds, bpm)
+        performed = align_to_bars(score, performed, seconds, bpm)
         tm_perf = TempoMap(performed)
         pairs = _match_notes(source_notes, notes_from_midi(performed), tm_original)
 

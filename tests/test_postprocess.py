@@ -204,3 +204,33 @@ def test_align_bars_moves_the_model_pedal_with_the_notes():
 def test_align_rejects_unknown_mode():
     with pytest.raises(ValueError, match='align'):
         blend_performance(midi(), midi(), bpm=120, align='beats')
+
+
+def test_bar_lines_follow_time_signature_and_tempo_changes():
+    from expressive_midi.postprocess import bar_lines_seconds
+    mf = mido.MidiFile(ticks_per_beat=480)
+    mf.tracks.append(mido.MidiTrack([
+        mido.MetaMessage('time_signature', numerator=3, denominator=4, time=0),
+        mido.MetaMessage('set_tempo', tempo=500000, time=0),          # 120 BPM
+        mido.MetaMessage('time_signature', numerator=4, denominator=4, time=2 * 1440),
+        mido.MetaMessage('set_tempo', tempo=1000000, time=1920),      # 60 BPM from bar 4
+    ]))
+    lines = bar_lines_seconds(mf, until_sec=6.0)
+    # Two 3/4 bars at 120 BPM (1.5 s each), one 4/4 bar (2 s), then 4/4 at 60 BPM (4 s).
+    assert lines[:5] == [0.0, 1.5, 3.0, 5.0, 9.0]
+
+
+def test_align_bars_with_a_meter_change():
+    # Bar 1 in 3/4, bar 2 onwards 4/4; the performance drifts 60 ticks per bar.
+    starts = [0, 480, 960, 1440, 1920, 2400, 2880, 3360, 3840]
+    drift = [0, 0, 0, 60, 60, 60, 60, 120, 120]
+    score = midi(pitches=[60] * 9, velocities=[64] * 9, starts=starts, lengths=[400] * 9)
+    score.tracks[0].insert(1, mido.MetaMessage('time_signature', numerator=3, denominator=4, time=0))
+    score.tracks[0].append(mido.MetaMessage('time_signature', numerator=4, denominator=4, time=1440))
+    score.tracks[0] = mido.MidiTrack([m for m in score.tracks[0]
+                                      if not (m.type == 'time_signature' and m.numerator == 4 and m.time == 0)])
+    perf = midi(pitches=[60] * 9, velocities=[64] * 9, starts=[s + d for s, d in zip(starts, drift)], lengths=[400] * 9)
+    out, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    got = [t for t, _ in _onsets(out)]
+    for bar_line in (0, 1440, 3360):   # 3/4 bar, then 4/4 bars
+        assert abs(got[starts.index(bar_line)] - bar_line) <= 1
