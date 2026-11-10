@@ -5,9 +5,11 @@ matching notes. This is an *offline* processor; it makes no host/API assumptions
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from math import isfinite
+from statistics import median
 import mido
 
 from .core import TempoMap, flatten_tempo, notes_from_midi
@@ -64,62 +66,214 @@ def _rebuild(midi: mido.MidiFile, note_on, note_off, *, pedal_events, replace_pe
     return out
 
 
+def _match_notes(source_notes, target_notes, tm_original):
+    """Pair every score note with a model note: per pitch, in time order.
+
+    Same-pitch notes that start at the same millisecond (unisons written in two
+    voices) form one group: Pianist Transformer's preprocessing (normalize_midi,
+    500 ticks/beat at 120 BPM) keeps only one of them. Every member of a group is
+    paired with that single model note. Any other mismatch raises.
+    """
+    def by_pitch(notes):
+        groups = defaultdict(list)
+        for note in notes:
+            groups[note.pitch].append(note)
+        for group in groups.values():
+            group.sort(key=lambda n: (n.onset_tick, n.track, n.on_index))
+        return groups
+
+    def unison_groups(notes):
+        groups = []
+        for note in notes:
+            key = round(tm_original.to_seconds(note.onset_tick) * 1000)
+            if groups and groups[-1][0] == key:
+                groups[-1][1].append(note)
+            else:
+                groups.append((key, [note]))
+        return [members for _, members in groups]
+
+    source_groups = {pitch: unison_groups(notes) for pitch, notes in by_pitch(source_notes).items()}
+    target_by_pitch = by_pitch(target_notes)
+    c1 = Counter({pitch: len(groups) for pitch, groups in source_groups.items()})
+    c2 = Counter(n.pitch for n in target_notes)
+    if c1 != c2:
+        diff = {p: (c1.get(p, 0), c2.get(p, 0)) for p in sorted(set(c1) | set(c2)) if c1.get(p, 0) != c2.get(p, 0)}
+        raise ValueError(f'Model output notes differ from the score at {len(diff)} pitch(es) '
+                         f'(pitch: score, model): {diff}')
+    return [(a, b) for pitch, groups in source_groups.items()
+            for group, b in zip(groups, target_by_pitch[pitch]) for a in group]
+
+
+def bar_lines_seconds(score: mido.MidiFile, until_sec: float) -> list[float]:
+    """Bar-line times (seconds) of the score, following every time-signature and
+    tempo change. Bars restart at each time-signature event, as MIDI places them
+    at bar lines. The list runs one bar past ``until_sec``."""
+    tm = TempoMap(score)
+    tpb = score.ticks_per_beat
+    changes: dict[int, tuple[int, int]] = {}
+    for track in score.tracks:
+        tick = 0
+        for msg in track:
+            tick += msg.time
+            if msg.type == 'time_signature' and msg.numerator > 0 and msg.denominator > 0:
+                changes[tick] = (msg.numerator, msg.denominator)
+    if 0 not in changes:
+        changes[0] = (4, 4)
+    starts = sorted(changes)
+    lines: list[float] = []
+    for i, start in enumerate(starts):
+        num, den = changes[start]
+        bar_ticks = num * 4 / den * tpb
+        stop = starts[i + 1] if i + 1 < len(starts) else None
+        k = 0
+        while True:
+            tick = start + k * bar_ticks
+            if stop is not None and tick >= stop:
+                break
+            sec = tm.to_seconds(tick)
+            lines.append(sec)
+            if stop is None and sec > until_sec:
+                break
+            k += 1
+    return sorted(set(round(t, 6) for t in lines))
+
+
+def bar_anchors(pairs, score_t: list[float], beat: float) -> tuple[list[float], list[float]]:
+    """Where the performance is at each score bar line.
+
+    The performance position at a bar line is the median offset of the notes the
+    score puts on that downbeat, or of the notes within half a beat of it when the
+    downbeat is silent. Bars without nearby notes are interpolated. The result is
+    strictly increasing, so the warp it defines keeps the note order.
+    """
+    if not pairs or not score_t:
+        return [], []
+    offsets: list[float | None] = []
+    for t in score_t:
+        exact = [b - a for a, b in pairs if abs(a - t) < 0.02]
+        near = exact or [b - a for a, b in pairs if abs(a - t) <= beat / 2]
+        offsets.append(median(near) if near else None)
+    known = [k for k, d in enumerate(offsets) if d is not None]
+    if not known:
+        return [], []
+    for k, d in enumerate(offsets):
+        if d is None:
+            before = max((j for j in known if j < k), default=None)
+            after = min((j for j in known if j > k), default=None)
+            if before is None:
+                offsets[k] = offsets[after]
+            elif after is None:
+                offsets[k] = offsets[before]
+            else:
+                w = (score_t[k] - score_t[before]) / (score_t[after] - score_t[before])
+                offsets[k] = offsets[before] * (1 - w) + offsets[after] * w
+    perf_t = [t + d for t, d in zip(score_t, offsets)]
+    for k in range(1, len(perf_t)):
+        gap = 0.2 * (score_t[k] - score_t[k - 1])
+        perf_t[k] = max(perf_t[k], perf_t[k - 1] + gap)
+    return list(score_t), perf_t
+
+
+def _warp(sec: float, perf_t: list[float], score_t: list[float]) -> float:
+    """Piecewise-linear map from performance time to score time through the anchors."""
+    if sec <= perf_t[0]:
+        return score_t[0] + (sec - perf_t[0])
+    if sec >= perf_t[-1]:
+        return score_t[-1] + (sec - perf_t[-1])
+    k = bisect_right(perf_t, sec) - 1
+    span = perf_t[k + 1] - perf_t[k]
+    return score_t[k] + (sec - perf_t[k]) * (score_t[k + 1] - score_t[k]) / span
+
+
+def align_to_bars(score: mido.MidiFile, performed: mido.MidiFile, pairs_sec, bpm: float) -> mido.MidiFile:
+    """Return the performance with its tempo drift removed bar by bar.
+
+    Every bar line of the performance is moved onto the score's bar line; inside a
+    bar the model's timing (rubato, chord spread, micro-timing) and its pedal are
+    stretched along with it. ``score`` is the original score (its own tempo and
+    time-signature map define the bar lines); ``performed`` has the constant DAW tempo.
+    """
+    last = max((a for a, _ in pairs_sec), default=0.0)
+    score_t, perf_t = bar_anchors(pairs_sec, bar_lines_seconds(score, last), 60 / bpm)
+    if not score_t:
+        return performed
+    tm = TempoMap(performed)
+    tps = performed.ticks_per_beat * bpm / 60
+    out = mido.MidiFile(type=performed.type, ticks_per_beat=performed.ticks_per_beat)
+    for track in performed.tracks:
+        tick, events, end = 0, [], 0
+        for index, msg in enumerate(track):
+            tick += msg.time
+            if msg.type == 'end_of_track':
+                end = tick
+                continue
+            new = tick if msg.is_meta else max(0, round(_warp(tm.to_seconds(tick), perf_t, score_t) * tps))
+            events.append((new, index, msg))
+        events.sort(key=lambda e: (e[0], e[1]))
+        rebuilt, last = mido.MidiTrack(), 0
+        for at, _, msg in events:
+            rebuilt.append(msg.copy(time=at - last))
+            last = at
+        end = max(round(_warp(tm.to_seconds(end), perf_t, score_t) * tps), last)
+        rebuilt.append(mido.MetaMessage('end_of_track', time=end - last))
+        out.tracks.append(rebuilt)
+    return out
+
+
 def blend_performance(score: mido.MidiFile, performance: mido.MidiFile,
                       *, bpm: float = 120.0, strength: float = 1.0,
-                      pedal: str = 'model') -> tuple[mido.MidiFile, RenderStats]:
+                      pedal: str = 'model', align: str = 'none') -> tuple[mido.MidiFile, RenderStats]:
     """Blend model performance into score MIDI, preserving note pitch/channel/track.
 
     The two files may have different TPB and tempo maps. Notes are matched by
-    pitch and order of occurrence. A mismatch raises rather than corrupting
-    the music. Output has a *constant* tempo set by bpm for DAW playback.
+    pitch and order of occurrence (see _match_notes). Output has a *constant*
+    tempo set by bpm for DAW playback.
 
     pedal: model (replace original CC64), score (keep original), or none.
+    align: none (keep the model's tempo, so the music drifts off the DAW grid) or
+    bars (pull the performance back onto every bar line of the score, keeping the
+    expression inside each bar, so it lines up with other tracks).
     """
     if not isfinite(strength) or not 0 <= strength <= 1:
         raise ValueError('strength must be finite and in [0, 1]')
     if pedal not in {'model', 'score', 'none'}:
         raise ValueError('pedal must be model, score or none')
+    if align not in {'none', 'bars'}:
+        raise ValueError('align must be none or bars')
     # Validates bpm, input type; preserves original channel/program/metadata.
     original = flatten_tempo(score, bpm=bpm)
     performed = flatten_tempo(performance, bpm=bpm)
     tm_original, tm_perf = TempoMap(original), TempoMap(performed)
     source_notes, target_notes = notes_from_midi(original), notes_from_midi(performed)
-    c1, c2 = Counter(n.pitch for n in source_notes), Counter(n.pitch for n in target_notes)
-    if c1 != c2:
-        raise ValueError(f'Model output note pitches/counts differ: score={dict(c1)}, model={dict(c2)}')
     if not source_notes:
         raise ValueError('No matching piano notes in score')
+    pairs = _match_notes(source_notes, target_notes, tm_original)
+    if align == 'bars':
+        seconds = [(tm_original.to_seconds(a.onset_tick), tm_perf.to_seconds(b.onset_tick)) for a, b in pairs]
+        performed = align_to_bars(score, performed, seconds, bpm)
+        tm_perf = TempoMap(performed)
+        pairs = _match_notes(source_notes, notes_from_midi(performed), tm_original)
 
-    def by_pitch(notes):
-        pairs = defaultdict(list)
-        for note in notes:
-            pairs[note.pitch].append(note)
-        for group in pairs.values():
-            group.sort(key=lambda n: (n.onset_tick, n.track, n.on_index))
-        return pairs
-
-    source_by_pitch, target_by_pitch = by_pitch(source_notes), by_pitch(target_notes)
     changes_on, changes_off = {}, {}
     stats_on = stats_v = stats_duration = 0
     tpb = original.ticks_per_beat
     ticks_per_second = tpb * bpm / 60
     # No negative ticks; an AI may start early. Preserve the negative shift where possible.
-    for pitch, notes in source_by_pitch.items():
-        for a, b in zip(notes, target_by_pitch[pitch]):
-            a_s = tm_original.to_seconds(a.onset_tick)
-            b_s = tm_perf.to_seconds(b.onset_tick)
-            a_e = tm_original.to_seconds(a.offset_tick)
-            b_e = tm_perf.to_seconds(b.offset_tick)
-            start_sec = max(0.0, (1-strength)*a_s + strength*b_s)
-            end_sec = (1-strength)*a_e + strength*b_e
-            onset = max(0, round(start_sec * ticks_per_second))
-            offset = max(onset+1, round(end_sec * ticks_per_second))
-            velocity = max(1, min(127, round((1-strength)*a.velocity + strength*b.velocity)))
-            changes_on[(a.track, a.on_index)] = (onset, velocity)
-            changes_off[(a.track, a.off_index)] = offset
-            stats_on += onset != a.onset_tick
-            stats_v += velocity != a.velocity
-            stats_duration += (offset-onset) != (a.offset_tick-a.onset_tick)
+    for a, b in pairs:
+        a_s = tm_original.to_seconds(a.onset_tick)
+        b_s = tm_perf.to_seconds(b.onset_tick)
+        a_e = tm_original.to_seconds(a.offset_tick)
+        b_e = tm_perf.to_seconds(b.offset_tick)
+        start_sec = max(0.0, (1-strength)*a_s + strength*b_s)
+        end_sec = (1-strength)*a_e + strength*b_e
+        onset = max(0, round(start_sec * ticks_per_second))
+        offset = max(onset+1, round(end_sec * ticks_per_second))
+        velocity = max(1, min(127, round((1-strength)*a.velocity + strength*b.velocity)))
+        changes_on[(a.track, a.on_index)] = (onset, velocity)
+        changes_off[(a.track, a.off_index)] = offset
+        stats_on += onset != a.onset_tick
+        stats_v += velocity != a.velocity
+        stats_duration += (offset-onset) != (a.offset_tick-a.onset_tick)
 
     # Limit retrigger overlaps of the same pitch/channel on the same track.
     overlapping = defaultdict(list)

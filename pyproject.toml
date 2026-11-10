@@ -20,3 +20,6 @@ testpaths = ["tests"]
 [tool.setuptools.packages.find]
 include = ["expressive_midi*"]
 exclude = ["tests*", "demo*", "vst3*"]
+
+[tool.setuptools.package-data]
+"expressive_midi._vendor.pianist_transformer" = ["LICENSE", "README.md"]

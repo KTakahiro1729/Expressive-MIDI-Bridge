@@ -1,6 +1,7 @@
-"""Zip a freshly built VST3 bundle for a GitHub Actions download.
+"""Zip a freshly built VST3 bundle plus the user README for download.
 
-Usage: python scripts/package_vst3.py --build build/vst3 --platform windows-x64
+Usage: python scripts/package_vst3.py --build build/vst3 --platform Windows
+Creates dist/Expressive-MIDI-Bridge-<platform>.zip containing the .vst3 and README.txt.
 """
 from __future__ import annotations
 
@@ -10,7 +11,10 @@ import sys
 import zipfile
 
 
-def package(build_dir: Path, platform: str, output_dir: Path) -> Path:
+README = Path(__file__).resolve().parent.parent / "packaging" / "README.txt"
+
+
+def package(build_dir: Path, platform: str, output_dir: Path, readme: Path | None = README) -> Path:
     if not build_dir.is_dir():
         raise FileNotFoundError(f"Build directory does not exist: {build_dir}")
     matches = sorted((p for p in build_dir.rglob("*.vst3") if p.is_dir() or p.is_file()), key=str)
@@ -21,7 +25,7 @@ def package(build_dir: Path, platform: str, output_dir: Path) -> Path:
         raise RuntimeError(f"Expected exactly one .vst3 bundle, found {len(roots)}: {roots}")
     root = roots[0]
     output_dir.mkdir(parents=True, exist_ok=True)
-    output = output_dir / f"Expressive-MIDI-Player-{platform}.zip"
+    output = output_dir / f"Expressive-MIDI-Bridge-{platform}.zip"
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         if root.is_file():
             archive.write(root, arcname=root.name)
@@ -31,6 +35,9 @@ def package(build_dir: Path, platform: str, output_dir: Path) -> Path:
                 raise RuntimeError(f"Empty VST3 bundle: {root}")
             for f in files:
                 archive.write(f, arcname=str(Path(root.name) / f.relative_to(root)))
+        if readme is not None:
+            # UTF-8 with BOM so that every Windows text editor shows the Japanese text correctly.
+            archive.writestr("README.txt", "\ufeff" + readme.read_text(encoding="utf-8").replace("\n", "\r\n"))
     print(f"Packaged {root} -> {output}")
     return output
 

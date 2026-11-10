@@ -20,16 +20,15 @@ jobs:
         with:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
-          pattern: expressive-*
+          pattern: expressive-vst3-*
           path: release-files
           merge-multiple: true
-      - name: Assert all platforms and Python are included
+      - name: Assert both platforms are included
         shell: bash
         run: |
           set -euo pipefail
-          test -s release-files/Expressive-MIDI-Player-windows-x64.zip
-          test -s release-files/Expressive-MIDI-Player-macos.zip
-          ls release-files/*.whl release-files/*.tar.gz >/dev/null
+          test -s release-files/Expressive-MIDI-Bridge-Windows.zip
+          test -s release-files/Expressive-MIDI-Bridge-macOS.zip
       - name: Publish permanent GitHub Release downloads
         shell: bash
         env:
@@ -44,8 +43,8 @@ jobs:
             gh release upload "$tag" release-files/* --clobber
           else
             gh release create "$tag" release-files/* \
-              --title "Automated build ${SOURCE_RUN}" \
-              --notes "Automated build from tested commit ${SOURCE_SHA}. Windows/macOS VST3 plugins are MIDI-only and unsigned; the Python package does not include AI model weights. Verify MIDI routing in your DAW." \
+              --title "Expressive MIDI Bridge (build ${SOURCE_RUN})" \
+              --notes "Download Expressive-MIDI-Bridge-Windows.zip or Expressive-MIDI-Bridge-macOS.zip and follow README.txt inside. Built from tested commit ${SOURCE_SHA}. Unsigned. The AI (Python, PyTorch, model) is downloaded by the plugin on first use." \
               --target "$SOURCE_SHA" \
-              --prerelease
+              --latest
           fi

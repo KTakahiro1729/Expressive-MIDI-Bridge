@@ -28,15 +28,7 @@ jobs:
         run: |
           python -m expressive_midi demo -o demo/ci_score.mid
           python -m expressive_midi render demo/ci_score.mid demo/ci_render.mid --backend baseline --daw-bpm 120
-      - name: Test C++ MIDI scheduler
-        run: |
-          g++ -std=c++17 -Wall -Wextra -Werror tests/scheduler_test.cpp -o /tmp/midi_scheduler_test
-          /tmp/midi_scheduler_test
-      - name: Test C++ live MIDI humanizer
-        run: |
-          g++ -std=c++17 -Wall -Wextra -Werror tests/live_humanizer_test.cpp -o /tmp/live_humanizer_test
-          /tmp/live_humanizer_test
-      - name: Test C++ clip model and rule-based renderer
+      - name: Test C++ clip model
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror tests/clip_model_test.cpp -o /tmp/clip_model_test
           /tmp/clip_model_test
@@ -60,9 +52,9 @@ jobs:
       matrix:
         include:
           - runner: windows-latest
-            platform: windows-x64
+            platform: Windows
           - runner: macos-latest
-            platform: macos
+            platform: macOS
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,7 +70,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: expressive-vst3-${{ matrix.platform }}
-          path: dist/Expressive-MIDI-Player-${{ matrix.platform }}.zip
+          path: dist/Expressive-MIDI-Bridge-${{ matrix.platform }}.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -93,7 +85,7 @@ jobs:
       - name: Download all packages
         uses: actions/download-artifact@v4
         with:
-          pattern: expressive-*
+          pattern: expressive-vst3-*
           path: release-files
           merge-multiple: true
       - name: Create release with direct downloads

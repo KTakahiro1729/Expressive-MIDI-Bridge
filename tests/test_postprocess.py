@@ -84,7 +84,7 @@ def test_score_pedal_mode():
 
 
 def test_note_pitch_mismatch_fails():
-    with pytest.raises(ValueError,match='pitches/counts'):
+    with pytest.raises(ValueError,match='differ from the score'):
         blend_performance(midi(), midi(pitches=(60, 65)))
 
 
@@ -124,3 +124,113 @@ def test_preserves_different_source_tempo_as_real_time():
     assert TempoMap(out).to_seconds(notes_from_midi(out)[0].onset_tick) == pytest.approx(.4,abs=.002)
     out,_ = blend_performance(score,perf,bpm=120,strength=1)
     assert TempoMap(out).to_seconds(notes_from_midi(out)[0].onset_tick) == pytest.approx(.5,abs=.002)
+
+
+def test_unison_doublings_match_one_model_note():
+    # Two voices write the same C at the same time; the model returns that C once.
+    score = midi(pitches=(60, 60, 64), velocities=(80, 70, 60), starts=(0, 0, 480), lengths=(480, 240, 480))
+    perf = midi(pitches=(60, 64), velocities=(100, 40), starts=(30, 500), lengths=(450, 470))
+    out, stats = blend_performance(score, perf, bpm=120, strength=1.0)
+    notes = sorted((n.pitch, n.velocity) for n in notes_from_midi(out))
+    assert notes == [(60, 100), (60, 100), (64, 40)]
+    assert stats.notes == 3
+
+
+def test_other_mismatches_still_raise():
+    score = midi(pitches=(60, 60), starts=(0, 480))
+    perf = midi(pitches=(60,), starts=(0,), velocities=(80,), lengths=(480,))
+    with pytest.raises(ValueError, match='differ from the score'):
+        blend_performance(score, perf, bpm=120)
+
+
+def _bar_test_files(drift_per_bar_ticks=60, micro=(0, 25, -15, 10)):
+    """4 bars of quarter notes; the 'performance' slows down a little more every bar
+    (cumulative drift) and adds a fixed micro-timing pattern inside each bar."""
+    pitches, starts, perf_starts = [], [], []
+    for bar in range(4):
+        for beat in range(4):
+            pitches.append(60 + beat)
+            starts.append(bar * 1920 + beat * 480)
+            perf_starts.append(bar * 1920 + beat * 480 + bar * drift_per_bar_ticks
+                               + beat * drift_per_bar_ticks // 4 + micro[beat])
+    n = len(pitches)
+    score = midi(pitches=pitches, velocities=[64] * n, starts=starts, lengths=[400] * n)
+    perf = midi(pitches=pitches, velocities=[90] * n, starts=perf_starts, lengths=[400] * n,
+                pedal=[(1920 + 60, 127), (3840 + 120, 0)])
+    return score, perf, starts
+
+
+def _onsets(mf):
+    return sorted((n.onset_tick, n.pitch) for n in notes_from_midi(mf))
+
+
+def test_align_bars_puts_downbeats_on_the_score_bar_lines():
+    score, perf, starts = _bar_test_files()
+    free, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='none')
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    downbeats = [s for s in starts if s % 1920 == 0]
+    got_free = [t for t, p in _onsets(free) if p == 60]
+    got_aligned = [t for t, p in _onsets(aligned) if p == 60]
+    # Without alignment the last downbeat drifts by 3 bars x 60 ticks.
+    assert got_free[-1] - downbeats[-1] == 180
+    # With alignment every downbeat sits on the score's bar line (within 1 tick).
+    assert all(abs(g - d) <= 1 for g, d in zip(got_aligned, downbeats))
+
+
+def test_align_bars_keeps_expression_inside_the_bar():
+    score, perf, starts = _bar_test_files(drift_per_bar_ticks=0)
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    # No drift: alignment must not remove the micro-timing (+25, -15, +10 ticks).
+    got = [t for t, _ in _onsets(aligned)]
+    assert got[1] - starts[1] == 25 and got[2] - starts[2] == -15 and got[3] - starts[3] == 10
+    # Velocities still come from the model.
+    assert {n.velocity for n in notes_from_midi(aligned)} == {90}
+
+
+def test_align_bars_moves_the_model_pedal_with_the_notes():
+    score, perf, _ = _bar_test_files()
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars', pedal='model')
+    ticks, t = [], 0
+    for tr in aligned.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.type == 'control_change' and msg.control == 64:
+                ticks.append(t)
+    # The pedal was 60 / 120 ticks late together with bars 2 and 3; now it is on the bar line.
+    assert [abs(x - y) <= 1 for x, y in zip(ticks, (1920, 3840))] == [True, True]
+
+
+def test_align_rejects_unknown_mode():
+    with pytest.raises(ValueError, match='align'):
+        blend_performance(midi(), midi(), bpm=120, align='beats')
+
+
+def test_bar_lines_follow_time_signature_and_tempo_changes():
+    from expressive_midi.postprocess import bar_lines_seconds
+    mf = mido.MidiFile(ticks_per_beat=480)
+    mf.tracks.append(mido.MidiTrack([
+        mido.MetaMessage('time_signature', numerator=3, denominator=4, time=0),
+        mido.MetaMessage('set_tempo', tempo=500000, time=0),          # 120 BPM
+        mido.MetaMessage('time_signature', numerator=4, denominator=4, time=2 * 1440),
+        mido.MetaMessage('set_tempo', tempo=1000000, time=1920),      # 60 BPM from bar 4
+    ]))
+    lines = bar_lines_seconds(mf, until_sec=6.0)
+    # Two 3/4 bars at 120 BPM (1.5 s each), one 4/4 bar (2 s), then 4/4 at 60 BPM (4 s).
+    assert lines[:5] == [0.0, 1.5, 3.0, 5.0, 9.0]
+
+
+def test_align_bars_with_a_meter_change():
+    # Bar 1 in 3/4, bar 2 onwards 4/4; the performance drifts 60 ticks per bar.
+    starts = [0, 480, 960, 1440, 1920, 2400, 2880, 3360, 3840]
+    drift = [0, 0, 0, 60, 60, 60, 60, 120, 120]
+    score = midi(pitches=[60] * 9, velocities=[64] * 9, starts=starts, lengths=[400] * 9)
+    score.tracks[0].insert(1, mido.MetaMessage('time_signature', numerator=3, denominator=4, time=0))
+    score.tracks[0].append(mido.MetaMessage('time_signature', numerator=4, denominator=4, time=1440))
+    score.tracks[0] = mido.MidiTrack([m for m in score.tracks[0]
+                                      if not (m.type == 'time_signature' and m.numerator == 4 and m.time == 0)])
+    perf = midi(pitches=[60] * 9, velocities=[64] * 9, starts=[s + d for s, d in zip(starts, drift)], lengths=[400] * 9)
+    out, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    got = [t for t, _ in _onsets(out)]
+    for bar_line in (0, 1440, 3360):   # 3/4 bar, then 4/4 bars
+        assert abs(got[starts.index(bar_line)] - bar_line) <= 1
