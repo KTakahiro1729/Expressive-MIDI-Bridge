@@ -270,11 +270,6 @@ void ExpressiveMidiPlayerEditor::paint(juce::Graphics& g)
     g.setColour(colours::text);
     g.setFont(juce::FontOptions(20.0f, juce::Font::bold));
     g.drawText("Expressive MIDI Bridge", margin, 12, getWidth() - 2 * margin, 26, juce::Justification::centredLeft);
-    g.setColour(colours::dim);
-    g.setFont(juce::FontOptions(13.0f));
-    g.drawText(tr("Gives piano MIDI a human performance with AI. Audio passes through unchanged.",
-                  "ピアノの MIDI に、AI で人間らしい表情を付けます。音はそのまま通します。"),
-               margin, 38, getWidth() - 2 * margin, 18, juce::Justification::centredLeft);
 
     if (!aiReady)
     {
@@ -293,7 +288,7 @@ void ExpressiveMidiPlayerEditor::paint(juce::Graphics& g)
 void ExpressiveMidiPlayerEditor::resized()
 {
     auto area = getLocalBounds().reduced(margin, 0);
-    area.removeFromTop(66);
+    area.removeFromTop(48);
 
     if (!aiReady)
     {

@@ -1,6 +1,6 @@
 # Expressive MIDI Bridge
 
-ピアノの MIDI に、AI（[Pianist Transformer](https://github.com/yhj137/PianistTransformer)）で人間らしい演奏の表情を付ける VST3 プラグインです。音は加工しません。結果は普通の MIDI として、いつものピアノのトラック（LABS、Pianoteq、Kontakt など何でも）に戻します。
+ピアノの MIDI のタイミング・強弱・ペダルを [Pianist Transformer](https://github.com/yhj137/PianistTransformer) で書き換える VST3 プラグインです。音は加工しません。
 
 ![プラグインの画面](docs/images/plugin-ja.png)
 
@@ -52,7 +52,7 @@ zip の中身は `Expressive MIDI Bridge.vst3` と `README.txt`（この下と�
 
 ## English
 
-A VST3 plugin that turns piano MIDI into an expressive performance with Pianist Transformer. Insert it on your piano track, press **Set up the AI** once (it installs a private Python environment and the model; nothing else to install), drop a `.mid` exported from the DAW, adjust **Expression**, and drag the result back onto the track. Audio passes through unchanged. Downloads: see the links above.
+A VST3 plugin that rewrites the timing, velocity and pedal of piano MIDI with Pianist Transformer. Insert it on your piano track, press **Set up the AI** once (it installs a private Python environment and the model; nothing else to install), drop a `.mid` exported from the DAW, adjust **Expression**, and drag the result back onto the track. Audio passes through unchanged. Downloads: see the links above.
 
 ## For developers
 

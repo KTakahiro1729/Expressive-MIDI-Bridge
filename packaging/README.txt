@@ -1,8 +1,8 @@
 Expressive MIDI Bridge
 ======================
 
-ピアノの MIDI に、AI（Pianist Transformer）で人間らしい表情を付ける VST3 プラグインです。
-音は加工しません。結果は普通の MIDI として、いつものピアノのトラックに戻します。
+ピアノの MIDI のタイミング・強弱・ペダルを Pianist Transformer で書き換える VST3 プラグインです。
+音は加工しません。
 
 ■ インストール（1回だけ）
 1. この zip の中の「Expressive MIDI Bridge.vst3」フォルダを、フォルダごと次の場所にコピーします。
