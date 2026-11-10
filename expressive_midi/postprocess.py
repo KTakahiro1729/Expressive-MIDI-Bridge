@@ -70,8 +70,11 @@ def blend_performance(score: mido.MidiFile, performance: mido.MidiFile,
     """Blend model performance into score MIDI, preserving note pitch/channel/track.
 
     The two files may have different TPB and tempo maps. Notes are matched by
-    pitch and order of occurrence. A mismatch raises rather than corrupting
-    the music. Output has a *constant* tempo set by bpm for DAW playback.
+    pitch and order of occurrence. Same-pitch notes that start at the same
+    millisecond (unisons written in two voices) count as one: Pianist
+    Transformer's preprocessing keeps only one of them, and every copy gets the
+    model's timing and velocity. Any other mismatch raises rather than
+    corrupting the music. Output has a *constant* tempo set by bpm for DAW playback.
 
     pedal: model (replace original CC64), score (keep original), or none.
     """
@@ -84,9 +87,6 @@ def blend_performance(score: mido.MidiFile, performance: mido.MidiFile,
     performed = flatten_tempo(performance, bpm=bpm)
     tm_original, tm_perf = TempoMap(original), TempoMap(performed)
     source_notes, target_notes = notes_from_midi(original), notes_from_midi(performed)
-    c1, c2 = Counter(n.pitch for n in source_notes), Counter(n.pitch for n in target_notes)
-    if c1 != c2:
-        raise ValueError(f'Model output note pitches/counts differ: score={dict(c1)}, model={dict(c2)}')
     if not source_notes:
         raise ValueError('No matching piano notes in score')
 
@@ -99,27 +99,48 @@ def blend_performance(score: mido.MidiFile, performance: mido.MidiFile,
         return pairs
 
     source_by_pitch, target_by_pitch = by_pitch(source_notes), by_pitch(target_notes)
+
+    # Collapse same-pitch notes with the same onset (to the millisecond, as upstream
+    # normalize_midi does at 500 ticks/beat and 120 BPM) into one group per model note.
+    def unison_groups(notes):
+        groups = []
+        for note in notes:
+            key = round(tm_original.to_seconds(note.onset_tick) * 1000)
+            if groups and groups[-1][0] == key:
+                groups[-1][1].append(note)
+            else:
+                groups.append((key, [note]))
+        return [members for _, members in groups]
+
+    source_groups = {pitch: unison_groups(notes) for pitch, notes in source_by_pitch.items()}
+    c1 = Counter({pitch: len(groups) for pitch, groups in source_groups.items()})
+    c2 = Counter(n.pitch for n in target_notes)
+    if c1 != c2:
+        diff = {p: (c1.get(p, 0), c2.get(p, 0)) for p in sorted(set(c1) | set(c2)) if c1.get(p, 0) != c2.get(p, 0)}
+        raise ValueError(f'Model output notes differ from the score at {len(diff)} pitch(es) '
+                         f'(pitch: score, model): {diff}')
     changes_on, changes_off = {}, {}
     stats_on = stats_v = stats_duration = 0
     tpb = original.ticks_per_beat
     ticks_per_second = tpb * bpm / 60
     # No negative ticks; an AI may start early. Preserve the negative shift where possible.
-    for pitch, notes in source_by_pitch.items():
-        for a, b in zip(notes, target_by_pitch[pitch]):
-            a_s = tm_original.to_seconds(a.onset_tick)
-            b_s = tm_perf.to_seconds(b.onset_tick)
-            a_e = tm_original.to_seconds(a.offset_tick)
-            b_e = tm_perf.to_seconds(b.offset_tick)
-            start_sec = max(0.0, (1-strength)*a_s + strength*b_s)
-            end_sec = (1-strength)*a_e + strength*b_e
-            onset = max(0, round(start_sec * ticks_per_second))
-            offset = max(onset+1, round(end_sec * ticks_per_second))
-            velocity = max(1, min(127, round((1-strength)*a.velocity + strength*b.velocity)))
-            changes_on[(a.track, a.on_index)] = (onset, velocity)
-            changes_off[(a.track, a.off_index)] = offset
-            stats_on += onset != a.onset_tick
-            stats_v += velocity != a.velocity
-            stats_duration += (offset-onset) != (a.offset_tick-a.onset_tick)
+    for pitch, groups in source_groups.items():
+        for group, b in zip(groups, target_by_pitch[pitch]):
+            for a in group:
+                a_s = tm_original.to_seconds(a.onset_tick)
+                b_s = tm_perf.to_seconds(b.onset_tick)
+                a_e = tm_original.to_seconds(a.offset_tick)
+                b_e = tm_perf.to_seconds(b.offset_tick)
+                start_sec = max(0.0, (1-strength)*a_s + strength*b_s)
+                end_sec = (1-strength)*a_e + strength*b_e
+                onset = max(0, round(start_sec * ticks_per_second))
+                offset = max(onset+1, round(end_sec * ticks_per_second))
+                velocity = max(1, min(127, round((1-strength)*a.velocity + strength*b.velocity)))
+                changes_on[(a.track, a.on_index)] = (onset, velocity)
+                changes_off[(a.track, a.off_index)] = offset
+                stats_on += onset != a.onset_tick
+                stats_v += velocity != a.velocity
+                stats_duration += (offset-onset) != (a.offset_tick-a.onset_tick)
 
     # Limit retrigger overlaps of the same pitch/channel on the same track.
     overlapping = defaultdict(list)

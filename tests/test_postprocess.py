@@ -84,7 +84,7 @@ def test_score_pedal_mode():
 
 
 def test_note_pitch_mismatch_fails():
-    with pytest.raises(ValueError,match='pitches/counts'):
+    with pytest.raises(ValueError,match='differ from the score'):
         blend_performance(midi(), midi(pitches=(60, 65)))
 
 
@@ -124,3 +124,20 @@ def test_preserves_different_source_tempo_as_real_time():
     assert TempoMap(out).to_seconds(notes_from_midi(out)[0].onset_tick) == pytest.approx(.4,abs=.002)
     out,_ = blend_performance(score,perf,bpm=120,strength=1)
     assert TempoMap(out).to_seconds(notes_from_midi(out)[0].onset_tick) == pytest.approx(.5,abs=.002)
+
+
+def test_unison_doublings_match_one_model_note():
+    # Two voices write the same C at the same time; the model returns that C once.
+    score = midi(pitches=(60, 60, 64), velocities=(80, 70, 60), starts=(0, 0, 480), lengths=(480, 240, 480))
+    perf = midi(pitches=(60, 64), velocities=(100, 40), starts=(30, 500), lengths=(450, 470))
+    out, stats = blend_performance(score, perf, bpm=120, strength=1.0)
+    notes = sorted((n.pitch, n.velocity) for n in notes_from_midi(out))
+    assert notes == [(60, 100), (60, 100), (64, 40)]
+    assert stats.notes == 3
+
+
+def test_other_mismatches_still_raise():
+    score = midi(pitches=(60, 60), starts=(0, 480))
+    perf = midi(pitches=(60,), starts=(0,), velocities=(80,), lengths=(480,))
+    with pytest.raises(ValueError, match='differ from the score'):
+        blend_performance(score, perf, bpm=120)

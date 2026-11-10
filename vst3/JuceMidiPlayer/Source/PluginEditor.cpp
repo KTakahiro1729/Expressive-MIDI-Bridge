@@ -134,9 +134,9 @@ void ExpressiveMidiPlayerEditor::refresh()
     setupBar.setVisible(!aiReady && installing);
     setupTitle.setText(tr("Set up the AI (first time only)", "AI の準備（初回のみ）"), juce::dontSendNotification);
     setupText.setText(tr("Downloads Python, PyTorch and the Pianist Transformer model into a private folder on this "
-                         "computer. Several hundred MB; takes a few minutes. Nothing else to install.",
+                         "computer: about 0.6 GB to download, 1.5 GB on disk, a few minutes. Nothing else to install.",
                          "Python・PyTorch・Pianist Transformer のモデルを、このパソコン専用のフォルダにダウンロードします。"
-                         "数百 MB・数分かかります。ほかに入れるものはありません。"),
+                         "ダウンロード約 0.6 GB・ディスク約 1.5 GB・数分かかります。ほかに入れるものはありません。"),
                       juce::dontSendNotification);
     setupButton.setButtonText(installing ? tr("Cancel", "キャンセル")
                             : rt.getStage() == AiRuntime::Stage::failed ? tr("Try again", "もう一度")

@@ -11,7 +11,7 @@ Expressive MIDI Bridge
 2. Fender Studio Pro を起動します。一覧に出ない時は
      Options（macOS は Preferences）→ Locations → VST Plug-ins →「Reset Blocklist」を押して再起動。
 3. ピアノのトラックのインサートに「Expressive MIDI Bridge」を挿して開き、
-   「AI を準備する」を押します。初回だけ、数百 MB をダウンロードします（数分）。
+   「AI を準備する」を押します。初回だけ、約 0.6 GB をダウンロードします（ディスク約 1.5 GB、数分）。
 
 ■ 使い方
 1. ピアノのパートをブラウザへドラッグし、ポップアップで「MIDI ファイル」を選びます

@@ -21,7 +21,7 @@ zip の中身は `Expressive MIDI Bridge.vst3` と `README.txt`（この下と�
 
    ![初回の画面](docs/images/plugin-setup-ja.png)
 
-   Python・PyTorch（CPU 版）・モデルを、このパソコン専用のフォルダに自動で入れます。数百 MB、数分かかります。Python や Git を自分で入れる必要はありません。
+   Python・PyTorch（CPU 版）・モデルを、このパソコン専用のフォルダに自動で入れます。ダウンロード約 0.6 GB、ディスク約 1.5 GB、数分かかります（作業環境での実測: 約 3.5 分）。Python や Git を自分で入れる必要はありません。
 
 ## 使い方
 
@@ -44,8 +44,9 @@ zip の中身は `Expressive MIDI Bridge.vst3` と `README.txt`（この下と�
 
 ## 確認できていること・いないこと
 
-- **確認済み（Linux、JUCE 8.0.10）**: VST3 のビルド、C++ と Python のテスト、テスト用プログラムで画面の各状態を確認。インストーラーは実際にダウンロードして、uv の取得・チェックサム確認・Python 3.11 と venv の作成まで動作。読み込み → AI → 強さの変更 → 書き出し → プロジェクトの保存と復元は、**偽のモデル**で確認しました。
-- **未確認**: Windows/macOS 上での動作、Fender Studio Pro へのドラッグ＆ドロップ、本物のモデルでの推論、PyTorch とモデルのダウンロード（作業環境から接続できなかったため）。
+- **確認済み（Linux、JUCE 8.0.10）**: VST3 のビルド、C++ と Python のテスト。プラグインのインストーラーで AI を実際に準備（最初から最後まで、約 3.5 分）。本物のモデルで、テスト用の楽譜 3 曲（534〜733 ノート、約 1〜2 分の曲）とデモ曲を加工（CPU で 1 曲 1.5〜2.5 分）。
+- **わかっている制限**: AI はテンポを揺らすので、結果は曲の後半ほど DAW の小節線からずれます（今回の 3 曲では終わりで 4〜7 秒）。ピアノ単独の曲なら問題ありませんが、ほかのトラックとは揃いません。
+- **未確認**: Windows/macOS 上での動作、Fender Studio Pro へのドラッグ＆ドロップ。
 - macOS 版は署名されていません。読み込まれない時は `xattr -dr com.apple.quarantine "/Library/Audio/Plug-Ins/VST3/Expressive MIDI Bridge.vst3"` を実行してください。
 
 ---
