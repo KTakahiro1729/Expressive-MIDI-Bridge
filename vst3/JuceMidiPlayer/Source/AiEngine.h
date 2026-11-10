@@ -89,6 +89,8 @@ public:
     bool loadFile(const juce::File&, double hostBpm, juce::String& error);
     void setStrength(double);              // 0..1; re-blends without running the model again
     double getStrength() const { return strength; }
+    void setAlignToBars(bool);             // keep every bar line where the score has it
+    bool getAlignToBars() const { return alignToBars; }
 
     Status getStatus() const { return status; }
     juce::String getFailure() const { return failure; }
@@ -116,6 +118,7 @@ private:
     juce::String sourceName;
     double bpm = 120.0;
     double strength = 1.0;
+    bool alignToBars = true;
     Status status = Status::noSource;
     juce::String failure;
     bool hasRaw = false;

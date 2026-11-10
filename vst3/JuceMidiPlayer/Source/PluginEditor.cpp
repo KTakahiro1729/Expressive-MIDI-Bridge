@@ -60,6 +60,12 @@ ExpressiveMidiPlayerEditor::ExpressiveMidiPlayerEditor(ExpressiveMidiPlayerProce
     strengthSlider.setValue(session.getStrength() * 100.0, juce::dontSendNotification);
     strengthSlider.onValueChange = [this] { session.setStrength(strengthSlider.getValue() / 100.0); };
 
+    addAndMakeVisible(alignToggle);
+    alignToggle.setColour(juce::ToggleButton::textColourId, colours::text);
+    alignToggle.setColour(juce::ToggleButton::tickColourId, colours::accent);
+    alignToggle.setToggleState(session.getAlignToBars(), juce::dontSendNotification);
+    alignToggle.onClick = [this] { session.setAlignToBars(alignToggle.getToggleState()); refresh(); };
+
     addAndMakeVisible(preview);
     addAndMakeVisible(dragHandle);
     dragHandle.prepareFile = [this]
@@ -167,6 +173,13 @@ void ExpressiveMidiPlayerEditor::refresh()
     }
 
     strengthLabel.setText(tr("Expression", "表情の強さ"), juce::dontSendNotification);
+    alignToggle.setButtonText(tr("Keep bar lines in place (to play with other tracks)",
+                                 "小節線に揃える（ほかのトラックと合わせる時）"));
+    alignToggle.setTooltip(tr("Removes the AI's tempo drift bar by bar, so every bar starts where it does in the "
+                              "original. The expression inside each bar is kept. Off: free tempo, for solo piano.",
+                              "AI のテンポのずれを小節ごとに戻し、どの小節も元と同じ位置から始まるようにします。"
+                              "小節の中の表情は残ります。オフにするとテンポは自由（ピアノ単独向け）。"));
+    alignToggle.setToggleState(session.getAlignToBars(), juce::dontSendNotification);
     strengthSlider.setTooltip(tr("100% = the AI performance; 0% = the original timing and dynamics.",
                                  "100% = AI の演奏そのまま、0% = 元の MIDI のまま。"));
 
@@ -319,6 +332,8 @@ void ExpressiveMidiPlayerEditor::resized()
     auto row = area.removeFromTop(30);
     strengthLabel.setBounds(row.removeFromLeft(120));
     strengthSlider.setBounds(row);
+    area.removeFromTop(4);
+    alignToggle.setBounds(area.removeFromTop(26).withTrimmedLeft(116));
     area.removeFromTop(12);
 
     area.removeFromBottom(margin);

@@ -141,3 +141,66 @@ def test_other_mismatches_still_raise():
     perf = midi(pitches=(60,), starts=(0,), velocities=(80,), lengths=(480,))
     with pytest.raises(ValueError, match='differ from the score'):
         blend_performance(score, perf, bpm=120)
+
+
+def _bar_test_files(drift_per_bar_ticks=60, micro=(0, 25, -15, 10)):
+    """4 bars of quarter notes; the 'performance' slows down a little more every bar
+    (cumulative drift) and adds a fixed micro-timing pattern inside each bar."""
+    pitches, starts, perf_starts = [], [], []
+    for bar in range(4):
+        for beat in range(4):
+            pitches.append(60 + beat)
+            starts.append(bar * 1920 + beat * 480)
+            perf_starts.append(bar * 1920 + beat * 480 + bar * drift_per_bar_ticks
+                               + beat * drift_per_bar_ticks // 4 + micro[beat])
+    n = len(pitches)
+    score = midi(pitches=pitches, velocities=[64] * n, starts=starts, lengths=[400] * n)
+    perf = midi(pitches=pitches, velocities=[90] * n, starts=perf_starts, lengths=[400] * n,
+                pedal=[(1920 + 60, 127), (3840 + 120, 0)])
+    return score, perf, starts
+
+
+def _onsets(mf):
+    return sorted((n.onset_tick, n.pitch) for n in notes_from_midi(mf))
+
+
+def test_align_bars_puts_downbeats_on_the_score_bar_lines():
+    score, perf, starts = _bar_test_files()
+    free, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='none')
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    downbeats = [s for s in starts if s % 1920 == 0]
+    got_free = [t for t, p in _onsets(free) if p == 60]
+    got_aligned = [t for t, p in _onsets(aligned) if p == 60]
+    # Without alignment the last downbeat drifts by 3 bars x 60 ticks.
+    assert got_free[-1] - downbeats[-1] == 180
+    # With alignment every downbeat sits on the score's bar line (within 1 tick).
+    assert all(abs(g - d) <= 1 for g, d in zip(got_aligned, downbeats))
+
+
+def test_align_bars_keeps_expression_inside_the_bar():
+    score, perf, starts = _bar_test_files(drift_per_bar_ticks=0)
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars')
+    # No drift: alignment must not remove the micro-timing (+25, -15, +10 ticks).
+    got = [t for t, _ in _onsets(aligned)]
+    assert got[1] - starts[1] == 25 and got[2] - starts[2] == -15 and got[3] - starts[3] == 10
+    # Velocities still come from the model.
+    assert {n.velocity for n in notes_from_midi(aligned)} == {90}
+
+
+def test_align_bars_moves_the_model_pedal_with_the_notes():
+    score, perf, _ = _bar_test_files()
+    aligned, _ = blend_performance(score, perf, bpm=120, strength=1.0, align='bars', pedal='model')
+    ticks, t = [], 0
+    for tr in aligned.tracks:
+        t = 0
+        for msg in tr:
+            t += msg.time
+            if msg.type == 'control_change' and msg.control == 64:
+                ticks.append(t)
+    # The pedal was 60 / 120 ticks late together with bars 2 and 3; now it is on the bar line.
+    assert [abs(x - y) <= 1 for x, y in zip(ticks, (1920, 3840))] == [True, True]
+
+
+def test_align_rejects_unknown_mode():
+    with pytest.raises(ValueError, match='align'):
+        blend_performance(midi(), midi(), bpm=120, align='beats')

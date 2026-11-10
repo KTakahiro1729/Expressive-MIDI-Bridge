@@ -51,6 +51,7 @@ private:
     juce::Label dropTitle, dropText;
     juce::Label strengthLabel;
     juce::Slider strengthSlider;
+    juce::ToggleButton alignToggle;
     PianoRollPreview preview;
     juce::Label status;
     DragToDawHandle dragHandle;

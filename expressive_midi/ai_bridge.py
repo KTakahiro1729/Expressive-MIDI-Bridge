@@ -3,7 +3,7 @@
 The plugin runs this module with the private Python environment it installed:
 
     python -m expressive_midi.ai_bridge render --score S.mid --raw R.mid --model DIR
-    python -m expressive_midi.ai_bridge blend --score S.mid --raw R.mid --out O.mid --bpm 120 --strength 0.8
+    python -m expressive_midi.ai_bridge blend --score S.mid --raw R.mid --out O.mid --bpm 120 --strength 0.8 [--align bars]
     python -m expressive_midi.ai_bridge check --model DIR
     python -m expressive_midi.ai_bridge download-model --dest DIR
 
@@ -61,11 +61,12 @@ def render(score: Path, raw: Path, model_dir: Path, device: str = 'auto',
     return device
 
 
-def blend(score: Path, raw: Path, out: Path, bpm: float, strength: float, pedal: str = 'model') -> dict:
+def blend(score: Path, raw: Path, out: Path, bpm: float, strength: float, pedal: str = 'model',
+          align: str = 'none') -> dict:
     import mido
     from .postprocess import blend_performance
     result, stats = blend_performance(mido.MidiFile(score), mido.MidiFile(raw),
-                                      bpm=bpm, strength=strength, pedal=pedal)
+                                      bpm=bpm, strength=strength, pedal=pedal, align=align)
     out.parent.mkdir(parents=True, exist_ok=True)
     result.save(out)
     return {'notes': stats.notes, 'velocity_changed': stats.velocity_changed,
@@ -115,6 +116,8 @@ def main(argv=None) -> int:
     b.add_argument('--bpm', type=float, required=True)
     b.add_argument('--strength', type=float, default=1.0)
     b.add_argument('--pedal', default='model', choices=['model', 'score', 'none'])
+    b.add_argument('--align', default='none', choices=['none', 'bars'],
+                   help='bars: keep every bar line where the score has it (to play with other tracks)')
     c = sub.add_parser('check')
     c.add_argument('--model', type=Path, required=True)
     d = sub.add_parser('download-model')
@@ -127,7 +130,8 @@ def main(argv=None) -> int:
         elif args.cmd == 'download-model':
             print(json.dumps({'model': str(download_model(args.dest))}), flush=True)
         elif args.cmd == 'blend':
-            print(json.dumps(blend(args.score, args.raw, args.out, args.bpm, args.strength, args.pedal)), flush=True)
+            print(json.dumps(blend(args.score, args.raw, args.out, args.bpm, args.strength, args.pedal, args.align)),
+                  flush=True)
         else:
             info = check(args.model)
             print(json.dumps(info), flush=True)

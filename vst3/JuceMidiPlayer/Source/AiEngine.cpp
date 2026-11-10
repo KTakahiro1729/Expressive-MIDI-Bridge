@@ -462,6 +462,17 @@ bool AiSession::loadFile(const juce::File& file, double hostBpm, juce::String& e
     return true;
 }
 
+void AiSession::setAlignToBars(bool on)
+{
+    if (on == alignToBars) return;
+    alignToBars = on;
+    if (hasRaw)
+    {
+        blendPending = true;
+        blendRequestedMs = 0.0; // a click, not a drag: blend right away
+    }
+}
+
 void AiSession::setStrength(double v)
 {
     strength = juce::jlimit(0.0, 1.0, v);
@@ -494,7 +505,7 @@ void AiSession::startBlend()
         rt.pythonExecutable().getFullPathName(), rt.bridgeScript().getFullPathName(), "blend",
         "--score", work("score.mid").getFullPathName(), "--raw", work("raw.mid").getFullPathName(),
         "--out", work("out.mid").getFullPathName(), "--bpm", juce::String(bpm, 4),
-        "--strength", juce::String(strength, 3) });
+        "--strength", juce::String(strength, 3), "--align", alignToBars ? "bars" : "none" });
     jobKind = JobKind::blend;
     if (result.empty()) status = Status::blending;
     job->start();
@@ -565,6 +576,7 @@ void AiSession::saveState(juce::XmlElement& parent) const
 {
     auto* x = parent.createNewChildElement("Ai");
     x->setAttribute("strength", strength);
+    x->setAttribute("alignToBars", alignToBars);
     if (!hasSource()) return;
     x->setAttribute("name", sourceName);
     x->setAttribute("bpm", bpm);
@@ -583,6 +595,7 @@ void AiSession::loadState(const juce::XmlElement& parent)
     const auto* x = parent.getChildByName("Ai");
     if (x == nullptr) return;
     strength = juce::jlimit(0.0, 1.0, x->getDoubleAttribute("strength", 1.0));
+    alignToBars = x->getBoolAttribute("alignToBars", true);
     const auto restore = [x, this](const char* key, const juce::String& file, Clip* clip)
     {
         juce::MemoryBlock bytes;
